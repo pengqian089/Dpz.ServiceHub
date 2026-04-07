@@ -1,0 +1,26 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Dpz.ServiceHub.App"
+             xmlns:local="using:Dpz.ServiceHub"
+             xmlns:converters="using:Dpz.ServiceHub.Converters"
+             RequestedThemeVariant="Dark">
+
+    <Application.Resources>
+        <!-- 注册转换器 -->
+        <converters:StatusToClassConverter x:Key="StatusToClassConverter"/>
+        <converters:StatusIsStoppedConverter x:Key="StatusIsStoppedConverter"/>
+        <converters:StatusIsRunningConverter x:Key="StatusIsRunningConverter"/>
+        <converters:CanStartConverter x:Key="CanStartConverter"/>
+        <converters:CanStopConverter x:Key="CanStopConverter"/>
+        <converters:StringHasValueConverter x:Key="StringHasValueConverter"/>
+    </Application.Resources>
+
+    <Application.DataTemplates>
+        <local:ViewLocator/>
+    </Application.DataTemplates>
+  
+    <Application.Styles>
+        <FluentTheme />
+        <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml" />
+    </Application.Styles>
+</Application>

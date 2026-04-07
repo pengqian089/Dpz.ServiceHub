@@ -1,0 +1,306 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Dpz.ServiceHub.ViewModels"
+        xmlns:models="using:Dpz.ServiceHub.Models"
+    xmlns:avaloniaEdit="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="700"
+        x:Class="Dpz.ServiceHub.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Icon="/Assets/Dpz.ServiceHub.ico"
+        Title="服务控制面板"
+        Width="1200" Height="700"
+        MinWidth="800" MinHeight="500"
+        WindowStartupLocation="CenterScreen">
+
+    <Design.DataContext>
+        <vm:MainWindowViewModel/>
+    </Design.DataContext>
+
+    <Window.Styles>
+        <!-- 服务状态指示灯样式 -->
+        <Style Selector="Ellipse.status-indicator">
+            <Setter Property="Width" Value="12"/>
+            <Setter Property="Height" Value="12"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+        </Style>
+
+        <Style Selector="Ellipse.status-stopped">
+            <Setter Property="Fill" Value="#DC3545"/>
+        </Style>
+
+        <Style Selector="Ellipse.status-running">
+            <Setter Property="Fill" Value="#28A745"/>
+        </Style>
+
+        <Style Selector="Ellipse.status-starting">
+            <Setter Property="Fill" Value="#FFC107"/>
+        </Style>
+
+        <Style Selector="Ellipse.status-stopping">
+            <Setter Property="Fill" Value="#FD7E14"/>
+        </Style>
+
+        <Style Selector="Ellipse.status-external">
+            <Setter Property="Fill" Value="#17A2B8"/>
+        </Style>
+
+        <!-- 按钮样式 -->
+        <Style Selector="Button.action-button">
+            <Setter Property="Margin" Value="4"/>
+            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="MinWidth" Value="80"/>
+        </Style>
+
+        <Style Selector="Button.small-button">
+            <Setter Property="Margin" Value="2"/>
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="MinWidth" Value="60"/>
+        </Style>
+
+        <Style Selector="Button.service-url-link">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Margin" Value="0,2,0,0"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
+            <Setter Property="Foreground" Value="#67C9FF"/>
+            <Setter Property="FontSize" Value="11"/>
+        </Style>
+
+        <Style Selector="ListBox.service-list">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+
+        <Style Selector="ListBox.service-list ListBoxItem">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+
+        <Style Selector="ListBox.service-list ListBoxItem:pointerover">
+            <Setter Property="Background" Value="#2A2D2E"/>
+        </Style>
+
+        <Style Selector="ListBox.service-list ListBoxItem:selected">
+            <Setter Property="Background" Value="#1F3B52"/>
+        </Style>
+    </Window.Styles>
+
+    <Grid RowDefinitions="Auto,*,Auto">
+        <!-- 顶部工具栏 -->
+        <Border Grid.Row="0" Background="#1E1E1E" Padding="12,8">
+            <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Grid.Column="0" 
+                          Text="服务控制面板" 
+                          FontSize="18" 
+                          FontWeight="Bold"
+                          VerticalAlignment="Center"
+                          Foreground="White"/>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                    <Button Classes="action-button" 
+                            Content="启动全部" 
+                            Command="{Binding StartAllCommand}"/>
+                    <Button Classes="action-button" 
+                            Content="停止全部" 
+                            Command="{Binding StopAllCommand}"/>
+                    <Button Classes="action-button" 
+                            x:Name="MinimizeToTrayButton"
+                            Content="最小化到托盘" 
+                            Click="OnMinimizeToTrayClicked"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- 主内容区 -->
+        <Grid Grid.Row="1" ColumnDefinitions="380,*">
+            <!-- 左侧服务列表 -->
+            <Border Grid.Column="0" Background="#252526" BorderBrush="#3E3E42" BorderThickness="0,0,1,0">
+                <Grid RowDefinitions="Auto,*,Auto">
+                    <TextBlock Grid.Row="0" 
+                              Text="服务列表" 
+                              FontSize="14" 
+                              FontWeight="SemiBold"
+                              Margin="12,12,12,8"
+                              Foreground="#CCCCCC"/>
+
+                    <ListBox Grid.Row="1"
+                             Classes="service-list"
+                             ItemsSource="{Binding Services}"
+                             SelectedItem="{Binding SelectedService, Mode=TwoWay}">
+                        <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="{Binding $parent[ListBoxItem].Background}" 
+                                            Padding="12,8" 
+                                            BorderBrush="#3E3E42" 
+                                            BorderThickness="0,0,0,1">
+                                        <Border.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="启动" 
+                                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).StartServiceCommand}"
+                                                         CommandParameter="{Binding}"/>
+                                                <MenuItem Header="停止" 
+                                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).StopServiceCommand}"
+                                                         CommandParameter="{Binding}"/>
+                                                <MenuItem Header="重启" 
+                                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).RestartServiceCommand}"
+                                                         CommandParameter="{Binding}"/>
+                                                <Separator/>
+                                                <MenuItem Header="编辑配置" 
+                                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).EditServiceCommand}"
+                                                         CommandParameter="{Binding}"/>
+                                                <MenuItem Header="删除" 
+                                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).DeleteServiceCommand}"
+                                                         CommandParameter="{Binding}"/>
+                                            </ContextMenu>
+                                        </Border.ContextMenu>
+
+                                        <Grid RowDefinitions="Auto,Auto">
+                                            <!-- 服务名称和状态 -->
+                                            <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto">
+                                                <!-- 状态指示灯 -->
+                                                <Ellipse Grid.Column="0" 
+                                                        Classes="status-indicator"
+                                                        VerticalAlignment="Center"
+                                                        Classes.status-stopped="{Binding Status, Converter={StaticResource StatusIsStoppedConverter}}"
+                                                        Classes.status-running="{Binding Status, Converter={StaticResource StatusIsRunningConverter}}"
+                                                        Classes.status-external="{Binding IsExternal}"/>
+
+                                                <!-- 服务名称 -->
+                                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding Config.Name}" 
+                                                              FontWeight="SemiBold"
+                                                              FontSize="13"
+                                                              Foreground="White"/>
+                                                    <TextBlock Text="{Binding Status}" 
+                                                              FontSize="11"
+                                                              Foreground="#808080"
+                                                              Margin="0,2,0,0"/>
+                                                    <Button Classes="service-url-link"
+                                                            Content="{Binding Config.ServiceUrl}"
+                                                            IsVisible="{Binding Config.ServiceUrl, Converter={StaticResource StringHasValueConverter}}"
+                                                            Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).OpenServiceUrlCommand}"
+                                                            CommandParameter="{Binding}"/>
+                                                </StackPanel>
+
+                                                <!-- 外部进程标记 -->
+                                                <TextBlock Grid.Column="2"
+                                                          Text="[外部]"
+                                                          FontSize="10"
+                                                          Foreground="#17A2B8"
+                                                          VerticalAlignment="Center"
+                                                          IsVisible="{Binding IsExternal}"/>
+                                            </Grid>
+
+                                            <!-- 控制按钮 -->
+                                            <StackPanel Grid.Row="1" 
+                                                       Orientation="Horizontal" 
+                                                       Margin="0,8,0,0"
+                                                       Spacing="4">
+                                                <Button Classes="small-button" 
+                                                       Content="启动"
+                                                       Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).StartServiceCommand}"
+                                                       CommandParameter="{Binding}">
+                                                    <Button.IsEnabled>
+                                                        <MultiBinding Converter="{StaticResource CanStartConverter}">
+                                                            <Binding Path="Status"/>
+                                                            <Binding Path="IsExecuting"/>
+                                                        </MultiBinding>
+                                                    </Button.IsEnabled>
+                                                </Button>
+                                                <Button Classes="small-button" 
+                                                       Content="停止"
+                                                       Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).StopServiceCommand}"
+                                                       CommandParameter="{Binding}">
+                                                    <Button.IsEnabled>
+                                                        <MultiBinding Converter="{StaticResource CanStopConverter}">
+                                                            <Binding Path="Status"/>
+                                                            <Binding Path="IsExecuting"/>
+                                                        </MultiBinding>
+                                                    </Button.IsEnabled>
+                                                </Button>
+                                                <Button Classes="small-button" 
+                                                       Content="重启"
+                                                       Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).RestartServiceCommand}"
+                                                       CommandParameter="{Binding}">
+                                                    <Button.IsEnabled>
+                                                        <MultiBinding Converter="{StaticResource CanStopConverter}">
+                                                            <Binding Path="Status"/>
+                                                            <Binding Path="IsExecuting"/>
+                                                        </MultiBinding>
+                                                    </Button.IsEnabled>
+                                                </Button>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <!-- 底部操作按钮 -->
+                    <StackPanel Grid.Row="2" 
+                               Orientation="Horizontal" 
+                               Margin="12"
+                               Spacing="8">
+                        <Button Classes="small-button" 
+                               Content="🔄 刷新" 
+                               Command="{Binding RefreshCommand}"/>
+                        <Button Classes="small-button" 
+                               Content="⚙ 设置"
+                               Command="{Binding OpenSettingsCommand}"/>
+                        <Button Classes="small-button" 
+                               Content="➕ 添加" 
+                               Command="{Binding AddServiceCommand}"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- 右侧控制台输出区 -->
+            <Grid Grid.Column="1" RowDefinitions="Auto,*" Background="#1E1E1E">
+                <!-- 控制台标题栏 -->
+                <Border Grid.Row="0" Background="#2D2D30" Padding="12,8" BorderBrush="#3E3E42" BorderThickness="0,0,0,1">
+                    <Grid ColumnDefinitions="Auto,*,Auto">
+                        <TextBlock Grid.Column="0" 
+                                  Text="控制台输出" 
+                                  FontWeight="SemiBold"
+                                  Foreground="#CCCCCC"/>
+                        
+                        <TextBlock Grid.Column="1" 
+                                  Text="{Binding SelectedService.Config.Name, StringFormat='选择服务: {0}'}"
+                                  Margin="16,0,0,0"
+                                  Foreground="#808080"/>
+
+                        <Button Grid.Column="2" 
+                               Classes="small-button"
+                               Content="清空输出" 
+                               Command="{Binding ClearOutputCommand}"/>
+                    </Grid>
+                </Border>
+
+                <!-- 控制台输出 -->
+                <avaloniaEdit:TextEditor Grid.Row="1"
+                                         Name="ConsoleEditor"
+                                         x:CompileBindings="False"
+                                         IsReadOnly="True"
+                                         ShowLineNumbers="False"
+                                         WordWrap="True"
+                                         FontFamily="Consolas,Courier New,monospace"
+                                         FontSize="12"
+                                         Background="#1E1E1E"
+                                         Foreground="#E6E6E6"
+                                         BorderThickness="0"
+                                         HorizontalScrollBarVisibility="Disabled"
+                                         VerticalScrollBarVisibility="Visible"
+                                         Padding="12"/>
+            </Grid>
+        </Grid>
+
+        <!-- 底部状态栏 -->
+        <Border Grid.Row="2" Background="#007ACC" Padding="8,4">
+            <TextBlock Text="{Binding StatusBarText}" Foreground="White" FontSize="12"/>
+        </Border>
+    </Grid>
+</Window>

@@ -1,0 +1,109 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Dpz.ServiceHub.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="620"
+        x:Class="Dpz.ServiceHub.Views.ServiceEditWindow"
+        x:DataType="vm:ServiceEditViewModel"
+        Icon="/Assets/Dpz.ServiceHub.ico"
+        Title="编辑服务配置"
+        Width="600" Height="620"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+
+    <Design.DataContext>
+        <vm:ServiceEditViewModel/>
+    </Design.DataContext>
+
+    <Grid RowDefinitions="*,Auto" Margin="20">
+        <!-- 表单区域 -->
+        <StackPanel Grid.Row="0" Spacing="16">
+            <!-- 服务名称 -->
+            <StackPanel>
+                <TextBlock Text="服务名称 *" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <TextBox Text="{Binding Name}" 
+                        Watermark="例如: Garnet"
+                        Padding="8"/>
+            </StackPanel>
+
+            <!-- 工作目录 -->
+            <StackPanel>
+                <TextBlock Text="工作目录 *" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <Grid ColumnDefinitions="*,Auto">
+                    <TextBox Grid.Column="0"
+                            Text="{Binding WorkingDirectory}" 
+                            Watermark="例如: C:\path\to\project"
+                            Padding="8"/>
+                    <Button Grid.Column="1" 
+                           Content="浏览..."
+                           Margin="8,0,0,0"
+                           Padding="12,6"
+                           Click="OnBrowseFolderClick"/>
+                </Grid>
+            </StackPanel>
+
+            <!-- 可执行文件 -->
+            <StackPanel>
+                <TextBlock Text="可执行文件 *" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <TextBox Text="{Binding Executable}" 
+                        Watermark="例如: dotnet"
+                        Padding="8"/>
+            </StackPanel>
+
+            <!-- 命令行参数 -->
+            <StackPanel>
+                <TextBlock Text="命令行参数" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <TextBox Text="{Binding Arguments}" 
+                        Watermark="例如: run -c Release -f net10.0"
+                        Padding="8"
+                        Height="80"
+                        AcceptsReturn="True"
+                        TextWrapping="Wrap"/>
+            </StackPanel>
+
+            <!-- 服务地址 -->
+            <StackPanel>
+                <TextBlock Text="服务地址（可空）" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <TextBox Text="{Binding ServiceUrl}"
+                        Watermark="例如: https://localhost:37701"
+                        Padding="8"/>
+            </StackPanel>
+
+            <!-- 监听端口 -->
+            <StackPanel>
+                <TextBlock FontWeight="SemiBold" Margin="0,0,0,4">
+                    <Run Text="监听端口（可空，用于服务检测）"/>
+                </TextBlock>
+                <TextBox Text="{Binding Ports}"
+                        Watermark="例如: 37701, 37702 或 6379"
+                        Padding="8"/>
+                <TextBlock Text="多个端口用逗号分隔" 
+                          FontSize="11" 
+                          Foreground="Gray" 
+                          Margin="4,4,0,0"/>
+            </StackPanel>
+
+            <!-- 自动启动 -->
+            <CheckBox IsChecked="{Binding AutoStart}" 
+                     Content="随工具自动启动"
+                     Margin="0,8,0,0"/>
+        </StackPanel>
+
+        <!-- 按钮区域 -->
+        <StackPanel Grid.Row="1" 
+                   Orientation="Horizontal" 
+                   HorizontalAlignment="Right"
+                   Spacing="12"
+                   Margin="0,20,0,0">
+            <Button Content="确定" 
+                   Width="100"
+                   Padding="12,6"
+                   Click="OnOkClick"/>
+            <Button Content="取消" 
+                   Width="100"
+                   Padding="12,6"
+                   Click="OnCancelClick"/>
+        </StackPanel>
+    </Grid>
+</Window>
