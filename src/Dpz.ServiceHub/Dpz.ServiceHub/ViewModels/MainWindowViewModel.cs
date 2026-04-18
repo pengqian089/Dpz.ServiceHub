@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.Input;
 using Dpz.ServiceHub.Models;
 using Dpz.ServiceHub.Services;
 using Dpz.ServiceHub.Views;
+using Serilog;
 
 namespace Dpz.ServiceHub.ViewModels;
 
@@ -101,8 +102,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             return !service.Process.HasExited;
         }
-        catch
+        catch (Exception ex)
         {
+            Log.Warning(ex, "Failed to determine managed running state for service {ServiceName}.", service.Config.Name);
             return false;
         }
     }
@@ -164,13 +166,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 }
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException ex)
         {
-            // Ignore cancellation.
+            Log.Warning(ex, "Periodic refresh was canceled.");
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Ignore background refresh failures to keep UI responsive.
+            Log.Error(ex, "Periodic refresh loop failed unexpectedly.");
         }
     }
 
@@ -436,9 +438,53 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 new ProcessStartInfo { FileName = uri.ToString(), UseShellExecute = true }
             );
         }
-        catch
+        catch (Exception ex)
         {
-            // Ignore launch failure.
+            Log.Warning(ex, "Failed to open service URL: {ServiceUrl}", url);
+        }
+    }
+
+    [RelayCommand]
+    private void OpenServiceFolder(ServiceInfo? serviceInfo)
+    {
+        var workingDirectory = serviceInfo?.Config.WorkingDirectory;
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            return;
+        }
+
+        var normalizedPath = workingDirectory.Trim().Trim('"');
+
+        try
+        {
+            if (Directory.Exists(normalizedPath))
+            {
+                Process.Start(
+                    new ProcessStartInfo
+                    {
+                        FileName = "explorer.exe",
+                        Arguments = $"\"{normalizedPath}\"",
+                        UseShellExecute = true,
+                    }
+                );
+                return;
+            }
+
+            if (File.Exists(normalizedPath))
+            {
+                Process.Start(
+                    new ProcessStartInfo
+                    {
+                        FileName = "explorer.exe",
+                        Arguments = $"/select,\"{normalizedPath}\"",
+                        UseShellExecute = true,
+                    }
+                );
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to open service folder: {ServicePath}", normalizedPath);
         }
     }
 

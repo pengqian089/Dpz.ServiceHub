@@ -152,6 +152,9 @@
                                                 <MenuItem Header="编辑配置" 
                                                          Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).EditServiceCommand}"
                                                          CommandParameter="{Binding}"/>
+                                                <MenuItem Header="打开目录"
+                                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).OpenServiceFolderCommand}"
+                                                         CommandParameter="{Binding}"/>
                                                 <MenuItem Header="删除" 
                                                          Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).DeleteServiceCommand}"
                                                          CommandParameter="{Binding}"/>

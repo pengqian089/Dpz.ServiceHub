@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.Input;
 using Dpz.ServiceHub.Models;
 using Dpz.ServiceHub.Services;
 using Dpz.ServiceHub.ViewModels;
+using Serilog;
 
 namespace Dpz.ServiceHub.Views;
 
@@ -274,6 +275,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"更新终端显示失败: {ex.Message}");
+            Log.Error(ex, "Failed to update terminal display.");
         }
         finally
         {
@@ -315,6 +317,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"写入终端失败: {ex.Message}");
+            Log.Error(ex, "Failed to write incremental terminal output.");
         }
     }
 
@@ -392,12 +395,14 @@ public partial class MainWindow : Window
                         return;
                     }
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException ex)
                 {
+                    Log.Warning(ex, "Shutdown flow canceled while stopping services before exit.");
                     return;
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Log.Error(ex, "Failed to stop all managed services during shutdown flow.");
                     return;
                 }
                 finally
