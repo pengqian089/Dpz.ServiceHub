@@ -128,6 +128,7 @@
                               Foreground="#CCCCCC"/>
 
                     <ListBox Grid.Row="1"
+                             Name="ServiceList"
                              Classes="service-list"
                              ItemsSource="{Binding Services}"
                              SelectedItem="{Binding SelectedService, Mode=TwoWay}">
@@ -286,6 +287,8 @@
                 <!-- 控制台输出 -->
                 <web:NativeWebView Grid.Row="1"
                                    Name="ConsoleWebView"
+                                   Focusable="False"
+                                   IsTabStop="False"
                                    x:CompileBindings="False"
                                    NavigationCompleted="OnWebViewNavigationCompleted"
                                    WebMessageReceived="OnWebViewMessageReceived" />

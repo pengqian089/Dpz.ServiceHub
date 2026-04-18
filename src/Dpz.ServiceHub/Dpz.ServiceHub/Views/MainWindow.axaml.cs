@@ -14,6 +14,7 @@ public partial class MainWindow : Window
 {
     private readonly AppSettingsStore _appSettingsStore = new();
     private readonly NativeWebView? _consoleWebView;
+    private readonly ListBox? _serviceList;
     private readonly TrayIcon? _trayIcon;
     private MainWindowViewModel? _viewModel;
     private ServiceInfo? _selectedService;
@@ -26,6 +27,7 @@ public partial class MainWindow : Window
     private DispatcherTimer? _updateDebounceTimer;
     private string _pendingOutput = string.Empty;
     private CancellationTokenSource? _shutdownFlowCancellationTokenSource;
+    private bool _isInTrayMode;
 
     public MainWindow()
     {
@@ -33,8 +35,12 @@ public partial class MainWindow : Window
         RestoreWindowBounds();
 
         _consoleWebView = this.FindControl<NativeWebView>("ConsoleWebView");
+        _serviceList = this.FindControl<ListBox>("ServiceList");
         if (_consoleWebView != null)
         {
+            _consoleWebView.Focusable = false;
+            _consoleWebView.IsTabStop = false;
+
             // 加载终端HTML页面
             var terminalHtmlPath = Path.Combine(
                 AppContext.BaseDirectory,
@@ -83,6 +89,7 @@ public partial class MainWindow : Window
         _updateDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
         _updateDebounceTimer.Tick += OnDebounceTimerTick;
 
+        Activated += OnWindowActivated;
         DataContextChanged += OnDataContextChanged;
     }
 
@@ -108,7 +115,36 @@ public partial class MainWindow : Window
             _shutdownFlowCancellationTokenSource = null;
         }
 
+        Activated -= OnWindowActivated;
+
         base.OnClosed(e);
+    }
+
+    private void OnWindowActivated(object? sender, EventArgs e)
+    {
+        // 避免任务栏恢复时焦点直接落入 WebView2，降低 MoveFocus 触发概率。
+        if (_serviceList == null || _isInTrayMode)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                try
+                {
+                    if (_serviceList.IsVisible && _serviceList.IsEffectivelyEnabled)
+                    {
+                        _serviceList.Focus();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Failed to apply activation focus guard.");
+                }
+            },
+            DispatcherPriority.Background
+        );
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)
@@ -168,6 +204,11 @@ public partial class MainWindow : Window
         {
             // 使用防抖机制，避免快速连续更新导致闪烁和重复
             _pendingOutput = _selectedService?.OutputText ?? string.Empty;
+
+            if (_isInTrayMode)
+            {
+                return;
+            }
 
             // 重启定时器
             _updateDebounceTimer?.Stop();
@@ -246,7 +287,7 @@ public partial class MainWindow : Window
     /// </summary>
     private async void UpdateTerminalDisplay()
     {
-        if (_consoleWebView == null || !_terminalReady || _isUpdatingTerminal)
+        if (_consoleWebView == null || !_terminalReady || _isUpdatingTerminal || _isInTrayMode)
         {
             return;
         }
@@ -291,6 +332,7 @@ public partial class MainWindow : Window
         if (
             _consoleWebView == null
             || !_terminalReady
+            || _isInTrayMode
             || string.IsNullOrEmpty(text)
             || _isUpdatingTerminal
         )
@@ -334,6 +376,7 @@ public partial class MainWindow : Window
         if (_minimizeToTray)
         {
             e.Cancel = true;
+            EnterTrayMode();
             Hide();
             _minimizeToTray = false;
             return;
@@ -477,9 +520,11 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnShowWindowClicked(object? sender, EventArgs e)
     {
+        ExitTrayMode();
         Show();
         WindowState = WindowState.Normal;
         Activate();
+        UpdateTerminalDisplay();
     }
 
     /// <summary>
@@ -505,5 +550,32 @@ public partial class MainWindow : Window
         // 没有运行中的服务，直接退出
         _allowClose = true;
         Close();
+    }
+
+    private void EnterTrayMode()
+    {
+        _isInTrayMode = true;
+        _updateDebounceTimer?.Stop();
+
+        if (_consoleWebView == null)
+        {
+            return;
+        }
+
+        _consoleWebView.IsEnabled = false;
+        _consoleWebView.IsVisible = false;
+    }
+
+    private void ExitTrayMode()
+    {
+        _isInTrayMode = false;
+
+        if (_consoleWebView == null)
+        {
+            return;
+        }
+
+        _consoleWebView.IsVisible = true;
+        _consoleWebView.IsEnabled = true;
     }
 }

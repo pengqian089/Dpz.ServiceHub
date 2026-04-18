@@ -61,7 +61,7 @@ namespace Dpz.ServiceHub
             Log.Logger = new LoggerConfiguration()
                 .MinimumLevel.Warning()
                 .WriteTo.File(
-                    path: Path.Combine(appDataPath, ".log"),
+                    path: Path.Combine(appDataPath, "servicehub-.log"),
                     rollingInterval: RollingInterval.Day,
                     retainedFileCountLimit: 14,
                     fileSizeLimitBytes: 10 * 1024 * 1024,
@@ -97,8 +97,46 @@ namespace Dpz.ServiceHub
 
             Dispatcher.UIThread.UnhandledException += (_, e) =>
             {
+                if (IsKnownWebView2FocusException(e.Exception))
+                {
+                    Log.Warning(
+                        e.Exception,
+                        "Ignored known WebView2 focus exception triggered during window activation/focus transition."
+                    );
+                    e.Handled = true;
+                    return;
+                }
+
                 Log.Error(e.Exception, "Unhandled UI thread exception.");
             };
+        }
+
+        private static bool IsKnownWebView2FocusException(Exception ex)
+        {
+            if (ex is not ArgumentException)
+            {
+                return false;
+            }
+
+            if (!string.Equals(ex.Message, "Value does not fall within the expected range."))
+            {
+                return false;
+            }
+
+            var stackTrace = ex.StackTrace;
+            if (string.IsNullOrWhiteSpace(stackTrace))
+            {
+                return false;
+            }
+
+            return stackTrace.Contains(
+                    "ICoreWebView2Controller.MoveFocus",
+                    StringComparison.Ordinal
+                )
+                && stackTrace.Contains(
+                    "Avalonia.Controls.NativeWebView.OnGotFocus",
+                    StringComparison.Ordinal
+                );
         }
 
         // Avalonia configuration, don't remove; also used by visual designer.

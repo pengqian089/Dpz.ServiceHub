@@ -672,6 +672,19 @@ public sealed class ServiceManager(string configFilePath)
                             );
                         }
                     }
+                    catch (ArgumentException)
+                    {
+                        // 进程在检查瞬间退出是常见竞态，按正常清理路径处理，不记录告警。
+                        var message = $"外部进程已不存在{Environment.NewLine}";
+                        results.Add(
+                            new ServiceDetectionResult(
+                                snapshot.Service,
+                                ServiceDetectionAction.Clear,
+                                null,
+                                message
+                            )
+                        );
+                    }
                     catch (Exception ex)
                     {
                         // 进程ID无效或进程已退出
