@@ -136,6 +136,73 @@ public sealed class ServiceManager(string configFilePath)
             startInfo.EnvironmentVariables["CLICOLOR_FORCE"] = "1";
             startInfo.EnvironmentVariables["FORCE_COLOR"] = "1";
 
+            // .NET特定的日志颜色设置
+            startInfo.EnvironmentVariables["Logging__Console__FormatterName"] = "Simple";
+            startInfo.EnvironmentVariables["Logging__Console__FormatterOptions__ColorBehavior"] =
+                "Enabled";
+            startInfo.EnvironmentVariables["Logging__Console__FormatterOptions__SingleLine"] =
+                "false";
+            startInfo.EnvironmentVariables["Logging__Console__FormatterOptions__IncludeScopes"] =
+                "false";
+            startInfo.EnvironmentVariables["DOTNET_CONSOLE_ANSI_COLOR"] = "1";
+
+            // ASP.NET Core特定设置
+            startInfo.EnvironmentVariables["ASPNETCORE_LOGGING__CONSOLE__DISABLECOLORS"] = "false";
+            startInfo.EnvironmentVariables["Logging__Console__LogLevel__Default"] = "Information";
+            startInfo.EnvironmentVariables["Logging__Console__LogLevel__Microsoft"] = "Warning";
+            startInfo.EnvironmentVariables[
+                "Logging__Console__LogLevel__Microsoft.Hosting.Lifetime"
+            ] = "Information";
+
+            // 确保NO_COLOR未设置（某些工具会检查此变量来禁用颜色）
+            if (startInfo.EnvironmentVariables.ContainsKey("NO_COLOR"))
+            {
+                startInfo.EnvironmentVariables.Remove("NO_COLOR");
+            }
+
+            // PowerShell 特殊处理 - 强制UTF-8输出
+            if (
+                resolvedFileName.Contains("pwsh", StringComparison.OrdinalIgnoreCase)
+                || resolvedFileName.Contains("powershell", StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                startInfo.EnvironmentVariables["POWERSHELL_TELEMETRY_OPTOUT"] = "1";
+
+                // 如果启动命令是 -File 或 -Command，在前面插入编码设置
+                if (!string.IsNullOrEmpty(resolvedArguments))
+                {
+                    var trimmedArgs = resolvedArguments.Trim();
+                    // 检查是否已经包含 -Command 参数
+                    if (
+                        trimmedArgs.StartsWith("-Command", StringComparison.OrdinalIgnoreCase)
+                        || trimmedArgs.StartsWith("-c ", StringComparison.OrdinalIgnoreCase)
+                    )
+                    {
+                        // 已经是 -Command，保持原样（脚本已经设置了编码）
+                    }
+                    else if (trimmedArgs.StartsWith("-File", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // -File 参数，提取文件路径并包装成 -Command
+                        var filePath = trimmedArgs.Substring("-File".Length).Trim();
+                        startInfo.Arguments =
+                            $"-NoProfile -Command \"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; & '{filePath}'\"";
+                    }
+                    else if (trimmedArgs.StartsWith("-f ", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // -f 简写，提取文件路径
+                        var filePath = trimmedArgs.Substring("-f".Length).Trim();
+                        startInfo.Arguments =
+                            $"-NoProfile -Command \"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; & '{filePath}'\"";
+                    }
+                    else
+                    {
+                        // 其他情况（直接的脚本路径），包装成 -File
+                        // 不需要设置编码，因为脚本已经在开头设置了
+                        // startInfo.Arguments = $"-NoProfile -File \"{trimmedArgs}\"";
+                    }
+                }
+            }
+
             var process = new Process { StartInfo = startInfo };
 
             // 捕获输出

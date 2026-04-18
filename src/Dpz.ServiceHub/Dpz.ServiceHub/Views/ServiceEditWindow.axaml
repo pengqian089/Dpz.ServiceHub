@@ -23,7 +23,7 @@
             <StackPanel>
                 <TextBlock Text="服务名称 *" FontWeight="SemiBold" Margin="0,0,0,4"/>
                 <TextBox Text="{Binding Name}" 
-                        Watermark="例如: Garnet"
+                        PlaceholderText="例如: Garnet"
                         Padding="8"/>
             </StackPanel>
 
@@ -33,7 +33,7 @@
                 <Grid ColumnDefinitions="*,Auto">
                     <TextBox Grid.Column="0"
                             Text="{Binding WorkingDirectory}" 
-                            Watermark="例如: C:\path\to\project"
+                            PlaceholderText="例如: C:\path\to\project"
                             Padding="8"/>
                     <Button Grid.Column="1" 
                            Content="浏览..."
@@ -47,7 +47,7 @@
             <StackPanel>
                 <TextBlock Text="可执行文件 *" FontWeight="SemiBold" Margin="0,0,0,4"/>
                 <TextBox Text="{Binding Executable}" 
-                        Watermark="例如: dotnet"
+                        PlaceholderText="例如: dotnet"
                         Padding="8"/>
             </StackPanel>
 
@@ -55,7 +55,7 @@
             <StackPanel>
                 <TextBlock Text="命令行参数" FontWeight="SemiBold" Margin="0,0,0,4"/>
                 <TextBox Text="{Binding Arguments}" 
-                        Watermark="例如: run -c Release -f net10.0"
+                        PlaceholderText="例如: run -c Release -f net10.0"
                         Padding="8"
                         Height="80"
                         AcceptsReturn="True"
@@ -66,7 +66,7 @@
             <StackPanel>
                 <TextBlock Text="服务地址（可空）" FontWeight="SemiBold" Margin="0,0,0,4"/>
                 <TextBox Text="{Binding ServiceUrl}"
-                        Watermark="例如: https://localhost:37701"
+                        PlaceholderText="例如: https://localhost:37701"
                         Padding="8"/>
             </StackPanel>
 
@@ -76,7 +76,7 @@
                     <Run Text="监听端口（可空，用于服务检测）"/>
                 </TextBlock>
                 <TextBox Text="{Binding Ports}"
-                        Watermark="例如: 37701, 37702 或 6379"
+                        PlaceholderText="例如: 37701, 37702 或 6379"
                         Padding="8"/>
                 <TextBlock Text="多个端口用逗号分隔" 
                           FontSize="11" 

@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terminal</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #1e1e1e;
+            overflow: hidden;
+        }
+        #terminal {
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        /* VS Code风格的精致滚动条 */
+        .xterm .xterm-viewport {
+            overflow-y: scroll;
+            overflow-x: hidden;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(121, 121, 121, 0.4) transparent;
+        }
+        
+        /* WebKit浏览器滚动条样式 */
+        .xterm .xterm-viewport::-webkit-scrollbar {
+            width: 10px;
+        }
+        
+        .xterm .xterm-viewport::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        .xterm .xterm-viewport::-webkit-scrollbar-thumb {
+            background-color: rgba(121, 121, 121, 0.4);
+            border-radius: 5px;
+            border: 2px solid transparent;
+            background-clip: padding-box;
+        }
+        
+        .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
+            background-color: rgba(100, 100, 100, 0.7);
+        }
+        
+        .xterm .xterm-viewport::-webkit-scrollbar-thumb:active {
+            background-color: rgba(191, 191, 191, 0.8);
+        }
+    </style>
+</head>
+<body>
+    <div id="terminal"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
+
+    <script>
+        // 初始化终端
+        const term = new Terminal({
+            cursorBlink: false,
+            cursorStyle: 'bar',
+            fontFamily: 'Consolas, "Courier New", monospace',
+            fontSize: 14,
+            theme: {
+                background: '#1e1e1e',
+                foreground: '#cccccc',
+                cursor: '#ffffff',
+                cursorAccent: '#000000',
+                selectionBackground: '#264f78',
+                black: '#0c0c0c',
+                red: '#c50f1f',
+                green: '#13a10e',
+                yellow: '#c19c00',
+                blue: '#0037da',
+                magenta: '#881798',
+                cyan: '#3a96dd',
+                white: '#cccccc',
+                brightBlack: '#767676',
+                brightRed: '#e74856',
+                brightGreen: '#16c60c',
+                brightYellow: '#f9f1a5',
+                brightBlue: '#3b78ff',
+                brightMagenta: '#b4009e',
+                brightCyan: '#61d6d6',
+                brightWhite: '#f2f2f2'
+            },
+            allowTransparency: false,
+            convertEol: true,
+            scrollback: 10000,
+            disableStdin: true,  // 只读模式
+            rightClickSelectsWord: true  // 右键选中单词
+        });
+
+        // 加载插件
+        const fitAddon = new FitAddon.FitAddon();
+        const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+        
+        term.loadAddon(fitAddon);
+        term.loadAddon(webLinksAddon);
+
+        // 打开终端
+        term.open(document.getElementById('terminal'));
+        fitAddon.fit();
+
+        // 窗口大小改变时自动调整
+        window.addEventListener('resize', () => {
+            fitAddon.fit();
+        });
+
+        // 禁用右键菜单
+        document.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+        });
+
+        // Ctrl+C 复制选中的文本
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'c') {
+                const selection = term.getSelection();
+                if (selection) {
+                    e.preventDefault();
+                    // 使用现代剪贴板API
+                    navigator.clipboard.writeText(selection).catch(err => {
+                        console.error('Failed to copy text: ', err);
+                    });
+                }
+            }
+        });
+
+        // 暴露给C#调用的方法
+        window.terminalWrite = function(text) {
+            term.write(text);
+        };
+
+        window.terminalClear = function() {
+            term.clear();
+        };
+
+        window.terminalReset = function() {
+            term.reset();
+        };
+
+        // 通知C#终端已准备就绪
+        window.invokeCSharpAction('terminal-ready');
+    </script>
+</body>
+</html>

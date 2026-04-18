@@ -1,10 +1,8 @@
-﻿using Avalonia;
+﻿using System.Text.Json;
 using Avalonia.Controls;
 using Avalonia.Platform;
-using AvaloniaEdit;
-using AvaloniaEdit.Editing;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.Input;
-using Dpz.ServiceHub.Controls;
 using Dpz.ServiceHub.Models;
 using Dpz.ServiceHub.Services;
 using Dpz.ServiceHub.ViewModels;
@@ -14,26 +12,40 @@ namespace Dpz.ServiceHub.Views;
 public partial class MainWindow : Window
 {
     private readonly AppSettingsStore _appSettingsStore = new();
-    private readonly TextEditor? _consoleEditor;
+    private readonly NativeWebView? _consoleWebView;
     private readonly TrayIcon? _trayIcon;
     private MainWindowViewModel? _viewModel;
     private ServiceInfo? _selectedService;
-    private string _lastRenderedOutput = string.Empty;
-    private bool _forceFullRender = true;
     private bool _allowClose;
     private bool _isClosingFlowRunning;
     private bool _minimizeToTray;
+    private bool _terminalReady;
+    private string _lastRenderedOutput = string.Empty;
+    private bool _isUpdatingTerminal;
+    private DispatcherTimer? _updateDebounceTimer;
+    private string _pendingOutput = string.Empty;
 
     public MainWindow()
     {
         InitializeComponent();
         RestoreWindowBounds();
 
-        _consoleEditor = this.FindControl<TextEditor>("ConsoleEditor");
-        if (_consoleEditor != null)
+        _consoleWebView = this.FindControl<NativeWebView>("ConsoleWebView");
+        if (_consoleWebView != null)
         {
-            _consoleEditor.Options = new TextEditorOptions { AllowScrollBelowDocument = false };
-            _consoleEditor.TextArea.TextView.LineTransformers.Add(new ServiceLogColorizer());
+            // 加载终端HTML页面
+            var terminalHtmlPath = Path.Combine(
+                AppContext.BaseDirectory,
+                "Assets",
+                "terminal.html"
+            );
+
+            if (File.Exists(terminalHtmlPath))
+            {
+                // 使用file://协议加载本地HTML文件
+                var fileUri = new Uri($"file:///{terminalHtmlPath.Replace("\\", "/")}");
+                _consoleWebView.Navigate(fileUri);
+            }
         }
 
         // 创建托盘图标
@@ -65,12 +77,24 @@ public partial class MainWindow : Window
         };
         _trayIcon.Clicked += (_, _) => OnTrayIconClicked(null, EventArgs.Empty);
 
+        // 初始化防抖定时器（50ms延迟，避免快速更新导致闪烁）
+        _updateDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+        _updateDebounceTimer.Tick += OnDebounceTimerTick;
+
         DataContextChanged += OnDataContextChanged;
     }
 
     protected override void OnClosed(EventArgs e)
     {
         PersistWindowBounds();
+
+        // 清理定时器
+        if (_updateDebounceTimer != null)
+        {
+            _updateDebounceTimer.Stop();
+            _updateDebounceTimer.Tick -= OnDebounceTimerTick;
+            _updateDebounceTimer = null;
+        }
 
         // 清理托盘图标
         _trayIcon?.Dispose();
@@ -112,16 +136,18 @@ public partial class MainWindow : Window
         }
 
         _selectedService = service;
+        _lastRenderedOutput = string.Empty;
 
         if (_selectedService != null)
         {
             _selectedService.PropertyChanged += OnSelectedServicePropertyChanged;
         }
 
-        _lastRenderedOutput = string.Empty;
-        _forceFullRender = true;
-
-        UpdateEditorText();
+        // 如果终端已准备就绪，立即更新显示
+        if (_terminalReady)
+        {
+            UpdateTerminalDisplay();
+        }
     }
 
     private void OnSelectedServicePropertyChanged(
@@ -129,67 +155,159 @@ public partial class MainWindow : Window
         System.ComponentModel.PropertyChangedEventArgs e
     )
     {
-        if (e.PropertyName == nameof(ServiceInfo.OutputText))
+        if (e.PropertyName == nameof(ServiceInfo.OutputText) && _terminalReady)
         {
-            UpdateEditorText();
+            // 使用防抖机制，避免快速连续更新导致闪烁和重复
+            _pendingOutput = _selectedService?.OutputText ?? string.Empty;
+
+            // 重启定时器
+            _updateDebounceTimer?.Stop();
+            _updateDebounceTimer?.Start();
         }
     }
 
-    private void UpdateEditorText()
+    /// <summary>
+    /// 防抖定时器触发 - 执行实际的终端更新
+    /// </summary>
+    private void OnDebounceTimerTick(object? sender, EventArgs e)
     {
-        if (_consoleEditor == null)
+        _updateDebounceTimer?.Stop();
+
+        if (_isUpdatingTerminal)
         {
             return;
         }
 
-        var wasAtBottom = IsAtBottom();
+        var currentOutput = _pendingOutput;
 
-        var currentOutput = _selectedService?.OutputText ?? string.Empty;
-        if (currentOutput.Length == 0)
+        // 检测清空操作（OutputText变为空）
+        if (string.IsNullOrEmpty(currentOutput) && !string.IsNullOrEmpty(_lastRenderedOutput))
         {
-            _consoleEditor.Clear();
-            _lastRenderedOutput = string.Empty;
-            _forceFullRender = false;
+            // 清空终端
+            UpdateTerminalDisplay();
             return;
         }
 
-        if (_forceFullRender)
+        // 空输出不处理
+        if (string.IsNullOrEmpty(currentOutput))
         {
-            _consoleEditor.Text = currentOutput;
-            _lastRenderedOutput = currentOutput;
-            _forceFullRender = false;
+            return;
         }
-        else if (currentOutput.StartsWith(_lastRenderedOutput, StringComparison.Ordinal))
+
+        // 增量更新
+        if (
+            !string.IsNullOrEmpty(_lastRenderedOutput)
+            && currentOutput.StartsWith(_lastRenderedOutput, StringComparison.Ordinal)
+            && currentOutput.Length > _lastRenderedOutput.Length
+        )
         {
             var delta = currentOutput[_lastRenderedOutput.Length..];
-            if (!string.IsNullOrEmpty(delta))
+            WriteToTerminal(delta, forceFullWrite: false);
+        }
+        else if (currentOutput != _lastRenderedOutput)
+        {
+            // 内容不连续或完全不同，全量更新
+            UpdateTerminalDisplay();
+        }
+    }
+
+    /// <summary>
+    /// WebView 导航完成事件
+    /// </summary>
+    private void OnWebViewNavigationCompleted(object? sender, WebViewNavigationCompletedEventArgs e)
+    {
+        // 导航成功后，终端会通过 invokeCSharpAction('terminal-ready') 通知准备就绪
+    }
+
+    /// <summary>
+    /// WebView 消息接收事件
+    /// </summary>
+    private void OnWebViewMessageReceived(object? sender, WebMessageReceivedEventArgs e)
+    {
+        if (e.Body == "terminal-ready")
+        {
+            _terminalReady = true;
+            // 终端准备就绪，更新当前选中服务的输出
+            UpdateTerminalDisplay();
+        }
+    }
+
+    /// <summary>
+    /// 更新终端显示（全量刷新）
+    /// </summary>
+    private async void UpdateTerminalDisplay()
+    {
+        if (_consoleWebView == null || !_terminalReady || _isUpdatingTerminal)
+        {
+            return;
+        }
+
+        try
+        {
+            _isUpdatingTerminal = true;
+            var currentOutput = _selectedService?.OutputText ?? string.Empty;
+
+            // 使用terminalReset+write避免闪烁，比clear+write更流畅
+            if (string.IsNullOrEmpty(currentOutput))
             {
-                _consoleEditor.AppendText(delta);
+                await _consoleWebView.InvokeScript("window.terminalClear()");
+                _lastRenderedOutput = string.Empty;
+            }
+            else
+            {
+                var escapedText = JsonSerializer.Serialize(currentOutput);
+                // 一次性清空并写入，减少闪烁
+                await _consoleWebView.InvokeScript(
+                    $"window.terminalReset(); window.terminalWrite({escapedText});"
+                );
                 _lastRenderedOutput = currentOutput;
             }
         }
-        else
+        catch (Exception ex)
         {
-            _consoleEditor.Text = currentOutput;
-            _lastRenderedOutput = currentOutput;
+            System.Diagnostics.Debug.WriteLine($"更新终端显示失败: {ex.Message}");
         }
-
-        if (wasAtBottom)
+        finally
         {
-            _consoleEditor.CaretOffset = _consoleEditor.Document?.TextLength ?? 0;
-            _consoleEditor.ScrollToEnd();
+            _isUpdatingTerminal = false;
         }
     }
 
-    private bool IsAtBottom()
+    /// <summary>
+    /// 向终端写入文本（增量）
+    /// </summary>
+    private async void WriteToTerminal(string text, bool forceFullWrite = false)
     {
-        if (_consoleEditor == null)
+        if (
+            _consoleWebView == null
+            || !_terminalReady
+            || string.IsNullOrEmpty(text)
+            || _isUpdatingTerminal
+        )
         {
-            return true;
+            return;
         }
 
-        var maxOffset = Math.Max(0, _consoleEditor.ExtentHeight - _consoleEditor.ViewportHeight);
-        return _consoleEditor.VerticalOffset >= maxOffset - 1;
+        try
+        {
+            // JavaScript转义
+            var escapedText = JsonSerializer.Serialize(text);
+            await _consoleWebView.InvokeScript($"window.terminalWrite({escapedText})");
+
+            // 更新已渲染的文本
+            if (forceFullWrite)
+            {
+                _lastRenderedOutput = text;
+            }
+            else
+            {
+                _lastRenderedOutput += text;
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"写入终端失败: {ex.Message}");
+        }
     }
 
     protected override void OnClosing(WindowClosingEventArgs e)
@@ -210,30 +328,27 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_consoleEditor != null)
+        if (_isClosingFlowRunning)
         {
-            if (_isClosingFlowRunning)
-            {
-                // 停止流程进行中，屏蔽再次关闭请求，避免状态竞争。
-                e.Cancel = true;
-                return;
-            }
-
-            if (_viewModel == null)
-            {
-                return;
-            }
-
-            var runningServices = _viewModel.GetManagedRunningServices();
-            if (runningServices.Count == 0)
-            {
-                return;
-            }
-
+            // 停止流程进行中，屏蔽再次关闭请求，避免状态竞争。
             e.Cancel = true;
-            _isClosingFlowRunning = true;
-            _ = HandleCloseWithConfirmationAsync(runningServices);
+            return;
         }
+
+        if (_viewModel == null)
+        {
+            return;
+        }
+
+        var runningServices = _viewModel.GetManagedRunningServices();
+        if (runningServices.Count == 0)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        _isClosingFlowRunning = true;
+        _ = HandleCloseWithConfirmationAsync(runningServices);
     }
 
     private async Task HandleCloseWithConfirmationAsync(IReadOnlyList<ServiceInfo> runningServices)

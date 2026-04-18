@@ -2,7 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Dpz.ServiceHub.ViewModels"
         xmlns:models="using:Dpz.ServiceHub.Models"
-    xmlns:avaloniaEdit="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
+        xmlns:web="clr-namespace:Avalonia.Controls;assembly=Avalonia.Controls.WebView"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="700"
@@ -281,20 +281,11 @@
                 </Border>
 
                 <!-- 控制台输出 -->
-                <avaloniaEdit:TextEditor Grid.Row="1"
-                                         Name="ConsoleEditor"
-                                         x:CompileBindings="False"
-                                         IsReadOnly="True"
-                                         ShowLineNumbers="False"
-                                         WordWrap="True"
-                                         FontFamily="Consolas,Courier New,monospace"
-                                         FontSize="12"
-                                         Background="#1E1E1E"
-                                         Foreground="#E6E6E6"
-                                         BorderThickness="0"
-                                         HorizontalScrollBarVisibility="Disabled"
-                                         VerticalScrollBarVisibility="Visible"
-                                         Padding="12"/>
+                <web:NativeWebView Grid.Row="1"
+                                   Name="ConsoleWebView"
+                                   x:CompileBindings="False"
+                                   NavigationCompleted="OnWebViewNavigationCompleted"
+                                   WebMessageReceived="OnWebViewMessageReceived" />
             </Grid>
         </Grid>
 

@@ -1,5 +1,4 @@
-﻿using System.Collections.ObjectModel;
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 
@@ -33,11 +32,6 @@ public sealed partial class ServiceInfo : ObservableObject
     private string _outputText = string.Empty;
 
     /// <summary>
-    /// 带颜色的输出行
-    /// </summary>
-    public ObservableCollection<ConsoleOutputLine> OutputLines { get; } = [new ConsoleOutputLine()];
-
-    /// <summary>
     /// 是否为外部进程
     /// </summary>
     [ObservableProperty]
@@ -60,11 +54,6 @@ public sealed partial class ServiceInfo : ObservableObject
     /// </summary>
     [ObservableProperty]
     private bool _isExecuting;
-
-    /// <summary>
-    /// 输出日志最大行数
-    /// </summary>
-    public int MaxOutputLines { get; set; } = 1000;
 
     public ServiceInfo(ServiceConfig config)
     {
@@ -96,32 +85,15 @@ public sealed partial class ServiceInfo : ObservableObject
 
     private void AppendOutputCore(string text)
     {
-        OutputText += AnsiColorParser.RemoveAnsiCodes(text);
+        // 保留ANSI代码，让WebView终端处理
+        OutputText += text;
 
-        var parsedLines = AnsiColorParser.ParseToLines(text);
-        for (var i = 0; i < parsedLines.Count; i++)
+        // 限制输出文本长度，防止内存溢出
+        const int maxLength = 500000; // 约500KB
+        if (OutputText.Length > maxLength)
         {
-            if (OutputLines.Count == 0)
-            {
-                OutputLines.Add(new ConsoleOutputLine());
-            }
-
-            var targetLine = OutputLines[^1];
-            foreach (var segment in parsedLines[i])
-            {
-                targetLine.Segments.Add(segment);
-            }
-
-            if (i < parsedLines.Count - 1)
-            {
-                OutputLines.Add(new ConsoleOutputLine());
-            }
-        }
-
-        // 限制输出行数
-        while (OutputLines.Count > MaxOutputLines)
-        {
-            OutputLines.RemoveAt(0);
+            // 保留最后的文本
+            OutputText = OutputText.Substring(OutputText.Length - maxLength);
         }
 
         LastUpdateTime = DateTime.Now;
@@ -135,8 +107,6 @@ public sealed partial class ServiceInfo : ObservableObject
         if (Dispatcher.UIThread.CheckAccess())
         {
             OutputText = string.Empty;
-            OutputLines.Clear();
-            OutputLines.Add(new ConsoleOutputLine());
             LastUpdateTime = DateTime.Now;
             return;
         }
@@ -144,8 +114,6 @@ public sealed partial class ServiceInfo : ObservableObject
         Dispatcher.UIThread.Post(() =>
         {
             OutputText = string.Empty;
-            OutputLines.Clear();
-            OutputLines.Add(new ConsoleOutputLine());
             LastUpdateTime = DateTime.Now;
         });
     }
