@@ -135,24 +135,20 @@ public sealed class ServiceManager(string configFilePath)
             startInfo.EnvironmentVariables["TERM"] = "xterm-256color";
             startInfo.EnvironmentVariables["CLICOLOR_FORCE"] = "1";
             startInfo.EnvironmentVariables["FORCE_COLOR"] = "1";
-
-            // .NET特定的日志颜色设置
-            startInfo.EnvironmentVariables["Logging__Console__FormatterName"] = "Simple";
-            startInfo.EnvironmentVariables["Logging__Console__FormatterOptions__ColorBehavior"] =
-                "Enabled";
-            startInfo.EnvironmentVariables["Logging__Console__FormatterOptions__SingleLine"] =
-                "false";
-            startInfo.EnvironmentVariables["Logging__Console__FormatterOptions__IncludeScopes"] =
-                "false";
             startInfo.EnvironmentVariables["DOTNET_CONSOLE_ANSI_COLOR"] = "1";
 
-            // ASP.NET Core特定设置
-            startInfo.EnvironmentVariables["ASPNETCORE_LOGGING__CONSOLE__DISABLECOLORS"] = "false";
-            startInfo.EnvironmentVariables["Logging__Console__LogLevel__Default"] = "Information";
-            startInfo.EnvironmentVariables["Logging__Console__LogLevel__Microsoft"] = "Warning";
-            startInfo.EnvironmentVariables[
-                "Logging__Console__LogLevel__Microsoft.Hosting.Lifetime"
-            ] = "Information";
+            // ASP.NET Core 项目单独注入日志颜色配置，避免影响普通控制台程序参数解析。
+            var isAspNetCoreService = IsAspNetCoreService(serviceInfo.Config);
+            if (isAspNetCoreService)
+            {
+                startInfo.EnvironmentVariables["Logging__Console__FormatterName"] = "Simple";
+                startInfo.EnvironmentVariables[
+                    "Logging__Console__FormatterOptions__ColorBehavior"
+                ] = "Enabled";
+                startInfo.EnvironmentVariables["Logging__Console__DisableColors"] = "false";
+                startInfo.EnvironmentVariables["ASPNETCORE_LOGGING__CONSOLE__DISABLECOLORS"] =
+                    "false";
+            }
 
             // 确保NO_COLOR未设置（某些工具会检查此变量来禁用颜色）
             if (startInfo.EnvironmentVariables.ContainsKey("NO_COLOR"))
@@ -1489,4 +1485,48 @@ public sealed class ServiceManager(string configFilePath)
 
         return null;
     }
+
+    private static bool IsAspNetCoreService(ServiceConfig config)
+    {
+        var workingDirectory = config.WorkingDirectory;
+        if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
+        {
+            return false;
+        }
+
+        if (File.Exists(Path.Combine(workingDirectory, "appsettings.json")))
+        {
+            return true;
+        }
+
+        if (File.Exists(Path.Combine(workingDirectory, "Properties", "launchSettings.json")))
+        {
+            return true;
+        }
+
+        foreach (var csprojPath in Directory.EnumerateFiles(workingDirectory, "*.csproj"))
+        {
+            try
+            {
+                var content = File.ReadAllText(csprojPath);
+                if (
+                    content.Contains("Microsoft.NET.Sdk.Web", StringComparison.OrdinalIgnoreCase)
+                    || content.Contains(
+                        "Microsoft.AspNetCore.App",
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+                // 忽略单个项目文件读取失败
+            }
+        }
+
+        return false;
+    }
+
 }

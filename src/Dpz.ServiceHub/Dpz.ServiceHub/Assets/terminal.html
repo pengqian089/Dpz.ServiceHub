@@ -105,6 +105,29 @@
         term.open(document.getElementById('terminal'));
         fitAddon.fit();
 
+        async function copyTextToClipboard(text) {
+            if (!text) {
+                return;
+            }
+
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(text);
+                return;
+            }
+
+            // WebView 的 file:// 场景可能不是安全上下文，回退到 execCommand。
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.left = '-9999px';
+            textarea.style.top = '-9999px';
+            document.body.appendChild(textarea);
+            textarea.focus();
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+        }
+
         // 窗口大小改变时自动调整
         window.addEventListener('resize', () => {
             fitAddon.fit();
@@ -115,18 +138,43 @@
             e.preventDefault();
         });
 
-        // Ctrl+C 复制选中的文本
-        document.addEventListener('keydown', (e) => {
-            if (e.ctrlKey && e.key === 'c') {
-                const selection = term.getSelection();
-                if (selection) {
-                    e.preventDefault();
-                    // 使用现代剪贴板API
-                    navigator.clipboard.writeText(selection).catch(err => {
-                        console.error('Failed to copy text: ', err);
-                    });
-                }
+        // 优先在 xterm 级别拦截 Ctrl+C，避免事件被内部输入层吞掉。
+        term.attachCustomKeyEventHandler((e) => {
+            const key = (e.key || '').toLowerCase();
+            const isCopy = (e.ctrlKey || e.metaKey) && key === 'c';
+            if (!isCopy) {
+                return true;
             }
+
+            const selection = term.getSelection();
+            if (!selection) {
+                return true;
+            }
+
+            e.preventDefault();
+            copyTextToClipboard(selection).catch(err => {
+                console.error('Failed to copy text: ', err);
+            });
+            return false;
+        });
+
+        // 兜底：焦点不在 xterm 输入层时，仍允许 Ctrl+C 复制选中内容。
+        document.addEventListener('keydown', (e) => {
+            const key = (e.key || '').toLowerCase();
+            const isCopy = (e.ctrlKey || e.metaKey) && key === 'c';
+            if (!isCopy) {
+                return;
+            }
+
+            const selection = term.getSelection();
+            if (!selection) {
+                return;
+            }
+
+            e.preventDefault();
+            copyTextToClipboard(selection).catch(err => {
+                console.error('Failed to copy text: ', err);
+            });
         });
 
         // 暴露给C#调用的方法
