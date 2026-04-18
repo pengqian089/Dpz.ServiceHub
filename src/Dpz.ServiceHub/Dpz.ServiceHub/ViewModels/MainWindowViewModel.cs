@@ -56,8 +56,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return Services.Where(IsManagedRunningService).ToList();
     }
 
-    public async Task StopManagedRunningServicesAsync(CancellationToken cancellationToken = default)
+    public async Task<bool> StopManagedRunningServicesAsync(
+        CancellationToken cancellationToken = default
+    )
     {
+        var allStopped = true;
         BeginStopProgress();
         var runningServices = GetManagedRunningServices();
         try
@@ -67,13 +70,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 service.IsExecuting = true;
                 try
                 {
-                    await _serviceManager.StopServiceAsync(service, cancellationToken);
+                    var stopped = await _serviceManager.StopServiceAsync(
+                        service,
+                        cancellationToken
+                    );
+                    allStopped &= stopped;
                 }
                 finally
                 {
                     service.IsExecuting = false;
                 }
             }
+
+            return allStopped;
         }
         finally
         {

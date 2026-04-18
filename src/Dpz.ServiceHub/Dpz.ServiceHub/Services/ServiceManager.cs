@@ -4,6 +4,7 @@ using System.Management;
 using System.Net.NetworkInformation;
 using System.Text;
 using System.Text.Json;
+using Avalonia.Threading;
 using Dpz.ServiceHub.Models;
 
 namespace Dpz.ServiceHub.Services;
@@ -223,9 +224,14 @@ public sealed class ServiceManager(string configFilePath)
                 serviceInfo.AppendOutput(
                     $"进程已退出，退出代码: {process.ExitCode}{Environment.NewLine}"
                 );
-                serviceInfo.Status = ServiceStatus.Stopped;
-                serviceInfo.Process = null;
-                serviceInfo.ProcessId = null;
+
+                Dispatcher.UIThread.Post(() =>
+                {
+                    serviceInfo.Status = ServiceStatus.Stopped;
+                    serviceInfo.Process = null;
+                    serviceInfo.ProcessId = null;
+                    serviceInfo.IsExternal = false;
+                });
             };
 
             process.EnableRaisingEvents = true;
@@ -358,7 +364,7 @@ public sealed class ServiceManager(string configFilePath)
 
                                 if (!process.HasExited)
                                 {
-                                    await process.WaitForExitAsync(CancellationToken.None);
+                                    await process.WaitForExitAsync(cancellationToken);
                                     serviceInfo.AppendOutput(
                                         $"已强制终止进程{Environment.NewLine}"
                                     );
@@ -404,7 +410,7 @@ public sealed class ServiceManager(string configFilePath)
                         if (!lingering.HasExited)
                         {
                             lingering.Kill(true);
-                            await lingering.WaitForExitAsync(CancellationToken.None);
+                            await lingering.WaitForExitAsync(cancellationToken);
                             serviceInfo.AppendOutput(
                                 $"已清理残留进程 PID: {processId}{Environment.NewLine}"
                             );
@@ -438,6 +444,12 @@ public sealed class ServiceManager(string configFilePath)
             serviceInfo.AppendOutput($"服务已停止{Environment.NewLine}");
 
             return true;
+        }
+        catch (OperationCanceledException)
+        {
+            serviceInfo.AppendOutput($"停止已取消{Environment.NewLine}");
+            serviceInfo.Status = ServiceStatus.Running;
+            return false;
         }
         catch (Exception ex)
         {

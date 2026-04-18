@@ -24,6 +24,7 @@ public partial class MainWindow : Window
     private bool _isUpdatingTerminal;
     private DispatcherTimer? _updateDebounceTimer;
     private string _pendingOutput = string.Empty;
+    private CancellationTokenSource? _shutdownFlowCancellationTokenSource;
 
     public MainWindow()
     {
@@ -98,6 +99,13 @@ public partial class MainWindow : Window
 
         // 清理托盘图标
         _trayIcon?.Dispose();
+
+        if (_shutdownFlowCancellationTokenSource != null)
+        {
+            _shutdownFlowCancellationTokenSource.Cancel();
+            _shutdownFlowCancellationTokenSource.Dispose();
+            _shutdownFlowCancellationTokenSource = null;
+        }
 
         base.OnClosed(e);
     }
@@ -369,11 +377,33 @@ public partial class MainWindow : Window
                 IsEnabled = false;
                 try
                 {
-                    await _viewModel.StopManagedRunningServicesAsync();
+                    _shutdownFlowCancellationTokenSource?.Cancel();
+                    _shutdownFlowCancellationTokenSource?.Dispose();
+                    _shutdownFlowCancellationTokenSource = new CancellationTokenSource(
+                        TimeSpan.FromSeconds(45)
+                    );
+
+                    var allStopped = await _viewModel.StopManagedRunningServicesAsync(
+                        _shutdownFlowCancellationTokenSource.Token
+                    );
+
+                    if (!allStopped || _viewModel.GetManagedRunningServices().Count > 0)
+                    {
+                        return;
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
                 }
                 catch
                 {
-                    // 即使停止过程中出现异常，也继续退出，避免窗口卡住无法关闭。
+                    return;
+                }
+                finally
+                {
+                    _shutdownFlowCancellationTokenSource?.Dispose();
+                    _shutdownFlowCancellationTokenSource = null;
                 }
             }
 
@@ -382,8 +412,11 @@ public partial class MainWindow : Window
         }
         finally
         {
-            IsEnabled = true;
-            _isClosingFlowRunning = false;
+            if (!_allowClose)
+            {
+                IsEnabled = true;
+                _isClosingFlowRunning = false;
+            }
         }
     }
 
