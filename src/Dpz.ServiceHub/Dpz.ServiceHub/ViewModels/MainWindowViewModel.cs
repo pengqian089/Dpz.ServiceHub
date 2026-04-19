@@ -1,5 +1,6 @@
 ﻿using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Reflection;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -7,6 +8,7 @@ using CommunityToolkit.Mvvm.Input;
 using Dpz.ServiceHub.Models;
 using Dpz.ServiceHub.Services;
 using Dpz.ServiceHub.Views;
+using Serilog;
 
 namespace Dpz.ServiceHub.ViewModels;
 
@@ -18,6 +20,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private AppSettings _currentSettings;
     private CancellationTokenSource _refreshCancellationTokenSource = new();
     private int _stopOperationCount;
+    private static readonly (string Version, string Hash) AppBuildInfo = ResolveAppBuildInfo();
 
     [ObservableProperty]
     private ServiceInfo? _selectedService;
@@ -28,7 +31,32 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     private bool _isStoppingServices;
 
-    public string StatusBarText => IsStoppingServices ? "停止中..." : "就绪";
+    public string StatusBarText =>
+        $"{(IsStoppingServices ? "停止中..." : "就绪")} | Version {AppBuildInfo.Version} | Hash {AppBuildInfo.Hash}";
+
+    private static (string Version, string Hash) ResolveAppBuildInfo()
+    {
+        var assembly = Assembly.GetEntryAssembly() ?? Assembly.GetExecutingAssembly();
+        var informationalVersion = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion;
+
+        if (!string.IsNullOrWhiteSpace(informationalVersion))
+        {
+            var metadataIndex = informationalVersion.IndexOf('+');
+            if (metadataIndex > 0)
+            {
+                var version = informationalVersion[..metadataIndex];
+                var hash = informationalVersion[(metadataIndex + 1)..];
+                return (version, string.IsNullOrWhiteSpace(hash) ? "-" : hash);
+            }
+
+            return (informationalVersion, "-");
+        }
+
+        var assemblyVersion = assembly.GetName().Version?.ToString();
+        return (string.IsNullOrWhiteSpace(assemblyVersion) ? "Unknown" : assemblyVersion, "-");
+    }
 
     public MainWindowViewModel()
     {
@@ -56,8 +84,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         return Services.Where(IsManagedRunningService).ToList();
     }
 
-    public async Task StopManagedRunningServicesAsync(CancellationToken cancellationToken = default)
+    public async Task<bool> StopManagedRunningServicesAsync(
+        CancellationToken cancellationToken = default
+    )
     {
+        var allStopped = true;
         BeginStopProgress();
         var runningServices = GetManagedRunningServices();
         try
@@ -67,13 +98,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 service.IsExecuting = true;
                 try
                 {
-                    await _serviceManager.StopServiceAsync(service, cancellationToken);
+                    var stopped = await _serviceManager.StopServiceAsync(
+                        service,
+                        cancellationToken
+                    );
+                    allStopped &= stopped;
                 }
                 finally
                 {
                     service.IsExecuting = false;
                 }
             }
+
+            return allStopped;
         }
         finally
         {
@@ -92,8 +129,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         {
             return !service.Process.HasExited;
         }
-        catch
+        catch (Exception ex)
         {
+            Log.Warning(
+                ex,
+                "Failed to determine managed running state for service {ServiceName}.",
+                service.Config.Name
+            );
             return false;
         }
     }
@@ -155,13 +197,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 }
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException ex)
         {
-            // Ignore cancellation.
+            Log.Warning(ex, "Periodic refresh was canceled.");
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Ignore background refresh failures to keep UI responsive.
+            Log.Error(ex, "Periodic refresh loop failed unexpectedly.");
         }
     }
 
@@ -427,9 +469,53 @@ public sealed partial class MainWindowViewModel : ViewModelBase
                 new ProcessStartInfo { FileName = uri.ToString(), UseShellExecute = true }
             );
         }
-        catch
+        catch (Exception ex)
         {
-            // Ignore launch failure.
+            Log.Warning(ex, "Failed to open service URL: {ServiceUrl}", url);
+        }
+    }
+
+    [RelayCommand]
+    private void OpenServiceFolder(ServiceInfo? serviceInfo)
+    {
+        var workingDirectory = serviceInfo?.Config.WorkingDirectory;
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            return;
+        }
+
+        var normalizedPath = workingDirectory.Trim().Trim('"');
+
+        try
+        {
+            if (Directory.Exists(normalizedPath))
+            {
+                Process.Start(
+                    new ProcessStartInfo
+                    {
+                        FileName = "explorer.exe",
+                        Arguments = $"\"{normalizedPath}\"",
+                        UseShellExecute = true,
+                    }
+                );
+                return;
+            }
+
+            if (File.Exists(normalizedPath))
+            {
+                Process.Start(
+                    new ProcessStartInfo
+                    {
+                        FileName = "explorer.exe",
+                        Arguments = $"/select,\"{normalizedPath}\"",
+                        UseShellExecute = true,
+                    }
+                );
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to open service folder: {ServicePath}", normalizedPath);
         }
     }
 

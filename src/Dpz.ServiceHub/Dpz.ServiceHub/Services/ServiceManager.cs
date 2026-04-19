@@ -4,7 +4,9 @@ using System.Management;
 using System.Net.NetworkInformation;
 using System.Text;
 using System.Text.Json;
+using Avalonia.Threading;
 using Dpz.ServiceHub.Models;
+using Serilog;
 
 namespace Dpz.ServiceHub.Services;
 
@@ -54,6 +56,11 @@ public sealed class ServiceManager(string configFilePath)
         {
             // 加载配置失败可能是首次运行或文件损坏，记录日志后继续
             Debug.WriteLine($"加载配置失败: {ex.Message}");
+            Log.Error(
+                ex,
+                "Failed to load service configuration from {ConfigPath}.",
+                _configFilePath
+            );
         }
     }
 
@@ -86,6 +93,7 @@ public sealed class ServiceManager(string configFilePath)
         {
             // 保存配置失败可能是权限或磁盘问题，记录日志
             Debug.WriteLine($"保存配置失败: {ex.Message}");
+            Log.Error(ex, "Failed to save service configuration to {ConfigPath}.", _configFilePath);
         }
     }
 
@@ -135,6 +143,66 @@ public sealed class ServiceManager(string configFilePath)
             startInfo.EnvironmentVariables["TERM"] = "xterm-256color";
             startInfo.EnvironmentVariables["CLICOLOR_FORCE"] = "1";
             startInfo.EnvironmentVariables["FORCE_COLOR"] = "1";
+            startInfo.EnvironmentVariables["DOTNET_CONSOLE_ANSI_COLOR"] = "1";
+
+            // ASP.NET Core 项目单独注入日志颜色配置，避免影响普通控制台程序参数解析。
+            var isAspNetCoreService = IsAspNetCoreService(serviceInfo.Config);
+            if (isAspNetCoreService)
+            {
+                startInfo.EnvironmentVariables["Logging__Console__FormatterName"] = "Simple";
+                startInfo.EnvironmentVariables[
+                    "Logging__Console__FormatterOptions__ColorBehavior"
+                ] = "Enabled";
+                startInfo.EnvironmentVariables["Logging__Console__DisableColors"] = "false";
+                startInfo.EnvironmentVariables["ASPNETCORE_LOGGING__CONSOLE__DISABLECOLORS"] =
+                    "false";
+            }
+
+            // 确保NO_COLOR未设置（某些工具会检查此变量来禁用颜色）
+            if (startInfo.EnvironmentVariables.ContainsKey("NO_COLOR"))
+            {
+                startInfo.EnvironmentVariables.Remove("NO_COLOR");
+            }
+
+            // PowerShell 特殊处理 - 强制UTF-8输出
+            if (IsPowerShellHost(resolvedFileName))
+            {
+                startInfo.EnvironmentVariables["POWERSHELL_TELEMETRY_OPTOUT"] = "1";
+
+                // 如果启动命令是 -File 或 -Command，在前面插入编码设置
+                if (!string.IsNullOrEmpty(resolvedArguments))
+                {
+                    var trimmedArgs = resolvedArguments.Trim();
+                    // 检查是否已经包含 -Command 参数
+                    if (
+                        trimmedArgs.StartsWith("-Command", StringComparison.OrdinalIgnoreCase)
+                        || trimmedArgs.StartsWith("-c ", StringComparison.OrdinalIgnoreCase)
+                    )
+                    {
+                        // 已经是 -Command，保持原样（脚本已经设置了编码）
+                    }
+                    else if (trimmedArgs.StartsWith("-File", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // -File 参数，提取文件路径并包装成 -Command
+                        var filePath = trimmedArgs.Substring("-File".Length).Trim();
+                        startInfo.Arguments =
+                            $"-NoProfile -Command \"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; & '{filePath}'\"";
+                    }
+                    else if (trimmedArgs.StartsWith("-f ", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // -f 简写，提取文件路径
+                        var filePath = trimmedArgs.Substring("-f".Length).Trim();
+                        startInfo.Arguments =
+                            $"-NoProfile -Command \"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; & '{filePath}'\"";
+                    }
+                    else
+                    {
+                        // 其他情况（直接的脚本路径），包装成 -File
+                        // 不需要设置编码，因为脚本已经在开头设置了
+                        // startInfo.Arguments = $"-NoProfile -File \"{trimmedArgs}\"";
+                    }
+                }
+            }
 
             var process = new Process { StartInfo = startInfo };
 
@@ -157,12 +225,7 @@ public sealed class ServiceManager(string configFilePath)
 
             process.Exited += (sender, e) =>
             {
-                serviceInfo.AppendOutput(
-                    $"进程已退出，退出代码: {process.ExitCode}{Environment.NewLine}"
-                );
-                serviceInfo.Status = ServiceStatus.Stopped;
-                serviceInfo.Process = null;
-                serviceInfo.ProcessId = null;
+                _ = HandleManagedProcessExitedAsync(serviceInfo, process, process.ExitCode);
             };
 
             process.EnableRaisingEvents = true;
@@ -189,6 +252,7 @@ public sealed class ServiceManager(string configFilePath)
         {
             serviceInfo.Status = ServiceStatus.Stopped;
             serviceInfo.AppendOutput($"启动失败: {ex.Message}{Environment.NewLine}");
+            Log.Error(ex, "Failed to start service {ServiceName}.", serviceInfo.Config.Name);
             return false;
         }
     }
@@ -251,9 +315,15 @@ public sealed class ServiceManager(string configFilePath)
                             {
                                 process = Process.GetProcessById(serviceInfo.ProcessId.Value);
                             }
-                            catch
+                            catch (Exception ex)
                             {
                                 // 进程已退出或不存在，重置为停止状态
+                                Log.Warning(
+                                    ex,
+                                    "Process not found while stopping service {ServiceName}, PID: {ProcessId}.",
+                                    serviceInfo.Config.Name,
+                                    serviceInfo.ProcessId.Value
+                                );
                                 serviceInfo.Process = null;
                                 serviceInfo.ProcessId = null;
                                 serviceInfo.Status = ServiceStatus.Stopped;
@@ -275,9 +345,14 @@ public sealed class ServiceManager(string configFilePath)
                                 {
                                     process.StandardInput?.Close();
                                 }
-                                catch
+                                catch (Exception ex)
                                 {
                                     // 忽略 StandardInput 关闭异常
+                                    Log.Warning(
+                                        ex,
+                                        "Failed to close standard input while stopping service {ServiceName}.",
+                                        serviceInfo.Config.Name
+                                    );
                                 }
                             }
 
@@ -288,14 +363,20 @@ public sealed class ServiceManager(string configFilePath)
                                 {
                                     process.Kill(true);
                                 }
-                                catch
+                                catch (Exception ex)
                                 {
                                     // Kill 可能失败（进程已退出等），交由后续检查处理
+                                    Log.Warning(
+                                        ex,
+                                        "Failed to kill process while stopping service {ServiceName}, PID: {ProcessId}.",
+                                        serviceInfo.Config.Name,
+                                        process.Id
+                                    );
                                 }
 
                                 if (!process.HasExited)
                                 {
-                                    await process.WaitForExitAsync(CancellationToken.None);
+                                    await process.WaitForExitAsync(cancellationToken);
                                     serviceInfo.AppendOutput(
                                         $"已强制终止进程{Environment.NewLine}"
                                     );
@@ -312,6 +393,11 @@ public sealed class ServiceManager(string configFilePath)
                     {
                         serviceInfo.AppendOutput(
                             $"停止进程时出错: {ex.Message}{Environment.NewLine}"
+                        );
+                        Log.Error(
+                            ex,
+                            "Failed while stopping service process for {ServiceName}.",
+                            serviceInfo.Config.Name
                         );
                     }
                 }
@@ -341,15 +427,21 @@ public sealed class ServiceManager(string configFilePath)
                         if (!lingering.HasExited)
                         {
                             lingering.Kill(true);
-                            await lingering.WaitForExitAsync(CancellationToken.None);
+                            await lingering.WaitForExitAsync(cancellationToken);
                             serviceInfo.AppendOutput(
                                 $"已清理残留进程 PID: {processId}{Environment.NewLine}"
                             );
                         }
                     }
-                    catch
+                    catch (Exception ex)
                     {
                         // 忽略单个进程清理失败，最终统一校验
+                        Log.Warning(
+                            ex,
+                            "Failed to cleanup lingering process {LingeringProcessId} for service {ServiceName}.",
+                            processId,
+                            serviceInfo.Config.Name
+                        );
                     }
                 }
 
@@ -376,10 +468,22 @@ public sealed class ServiceManager(string configFilePath)
 
             return true;
         }
+        catch (OperationCanceledException ex)
+        {
+            serviceInfo.AppendOutput($"停止已取消{Environment.NewLine}");
+            serviceInfo.Status = ServiceStatus.Running;
+            Log.Warning(
+                ex,
+                "Stopping service {ServiceName} was canceled.",
+                serviceInfo.Config.Name
+            );
+            return false;
+        }
         catch (Exception ex)
         {
             serviceInfo.AppendOutput($"停止失败: {ex.Message}{Environment.NewLine}");
             serviceInfo.Status = ServiceStatus.Stopped;
+            Log.Error(ex, "Failed to stop service {ServiceName}.", serviceInfo.Config.Name);
             return false;
         }
     }
@@ -418,6 +522,11 @@ public sealed class ServiceManager(string configFilePath)
         catch (Exception ex)
         {
             serviceInfo.AppendOutput($"发送命令失败: {ex.Message}{Environment.NewLine}");
+            Log.Error(
+                ex,
+                "Failed to send command to service {ServiceName}.",
+                serviceInfo.Config.Name
+            );
         }
     }
 
@@ -460,6 +569,7 @@ public sealed class ServiceManager(string configFilePath)
                     serviceInfo,
                     serviceInfo.Config,
                     serviceInfo.Status,
+                    serviceInfo.IsExecuting,
                     serviceInfo.IsExternal,
                     serviceInfo.ProcessId,
                     serviceInfo.Process != null
@@ -499,9 +609,10 @@ public sealed class ServiceManager(string configFilePath)
                 }
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException ex)
         {
             // 检测任务被取消（通常是设置更改或应用退出），优雅返回
+            Log.Warning(ex, "External process detection task was canceled.");
         }
     }
 
@@ -522,6 +633,12 @@ public sealed class ServiceManager(string configFilePath)
             foreach (var snapshot in snapshots)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+
+                // 托管启动/停止/重启期间由应用控制状态，不参与外部进程判定。
+                if (snapshot.IsExecuting)
+                {
+                    continue;
+                }
 
                 if (snapshot.IsExternal && snapshot.ProcessId.HasValue)
                 {
@@ -565,9 +682,27 @@ public sealed class ServiceManager(string configFilePath)
                             );
                         }
                     }
-                    catch
+                    catch (ArgumentException)
+                    {
+                        // 进程在检查瞬间退出是常见竞态，按正常清理路径处理，不记录告警。
+                        var message = $"外部进程已不存在{Environment.NewLine}";
+                        results.Add(
+                            new ServiceDetectionResult(
+                                snapshot.Service,
+                                ServiceDetectionAction.Clear,
+                                null,
+                                message
+                            )
+                        );
+                    }
+                    catch (Exception ex)
                     {
                         // 进程ID无效或进程已退出
+                        Log.Warning(
+                            ex,
+                            "Failed to check external process state for PID: {ProcessId}.",
+                            snapshot.ProcessId.Value
+                        );
                         var message = $"外部进程已不存在{Environment.NewLine}";
                         results.Add(
                             new ServiceDetectionResult(
@@ -582,7 +717,11 @@ public sealed class ServiceManager(string configFilePath)
                     continue;
                 }
 
-                if (snapshot.Status == ServiceStatus.Running && snapshot.HasManagedProcess)
+                if (
+                    snapshot.Status == ServiceStatus.Running
+                    && !snapshot.IsExternal
+                    && (snapshot.HasManagedProcess || snapshot.ProcessId == Environment.ProcessId)
+                )
                 {
                     continue;
                 }
@@ -614,9 +753,10 @@ public sealed class ServiceManager(string configFilePath)
                 );
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException ex)
         {
             // 检测任务被取消，返回空结果
+            Log.Warning(ex, "Service snapshot detection was canceled.");
         }
 
         return results;
@@ -635,9 +775,15 @@ public sealed class ServiceManager(string configFilePath)
                 {
                     return Process.GetProcessById(processId);
                 }
-                catch
+                catch (Exception ex)
                 {
                     // 端口在使用但进程已退出，使用当前进程作为占位符
+                    Log.Warning(
+                        ex,
+                        "Failed to resolve process by port for service {ServiceName}, port {Port}.",
+                        config.Name,
+                        config.Ports.FirstOrDefault(IsPortInUse)
+                    );
                 }
             }
 
@@ -657,9 +803,14 @@ public sealed class ServiceManager(string configFilePath)
         {
             return Process.GetProcessById(matchedProcessId);
         }
-        catch
+        catch (Exception ex)
         {
             // 进程获取失败，返回 null
+            Log.Warning(
+                ex,
+                "Failed to resolve matched process by PID: {ProcessId}.",
+                matchedProcessId
+            );
             return null;
         }
     }
@@ -675,9 +826,10 @@ public sealed class ServiceManager(string configFilePath)
             var tcpListeners = ipProperties.GetActiveTcpListeners();
             return tcpListeners.Any(endpoint => endpoint.Port == port);
         }
-        catch
+        catch (Exception ex)
         {
             // 忽略网络接口查询失败
+            Log.Warning(ex, "Failed to inspect TCP listener state for port {Port}.", port);
             return false;
         }
     }
@@ -728,9 +880,10 @@ public sealed class ServiceManager(string configFilePath)
                 }
             }
         }
-        catch
+        catch (Exception ex)
         {
             // 命令执行或解析输出失败，返回无效 PID
+            Log.Warning(ex, "Failed to query process id by port {Port}.", port);
             return -1;
         }
 
@@ -768,6 +921,13 @@ public sealed class ServiceManager(string configFilePath)
                     serviceInfo.AppendOutput(
                         $"停止占用端口 {port} 的进程失败: {ex.Message}{Environment.NewLine}"
                     );
+                    Log.Error(
+                        ex,
+                        "Failed to stop process {ProcessId} occupying port {Port} for service {ServiceName}.",
+                        processId,
+                        port,
+                        serviceInfo.Config.Name
+                    );
                 }
             }
         }
@@ -790,6 +950,7 @@ public sealed class ServiceManager(string configFilePath)
         ServiceInfo Service,
         ServiceConfig Config,
         ServiceStatus Status,
+        bool IsExecuting,
         bool IsExternal,
         int? ProcessId,
         bool HasManagedProcess
@@ -875,9 +1036,10 @@ public sealed class ServiceManager(string configFilePath)
                 snapshots.Add(new ProcessSnapshot(processId, name, commandLine, executablePath));
             }
         }
-        catch
+        catch (Exception ex)
         {
             // WMI 查询失败，返回空集合
+            Log.Warning(ex, "Failed to enumerate process snapshots through WMI.");
             return snapshots;
         }
         finally
@@ -1057,7 +1219,17 @@ public sealed class ServiceManager(string configFilePath)
         return executableBaseName.Equals("dotnet", StringComparison.OrdinalIgnoreCase)
             || executableBaseName.Equals("pwsh", StringComparison.OrdinalIgnoreCase)
             || executableBaseName.Equals("powershell", StringComparison.OrdinalIgnoreCase)
-            || executableBaseName.Equals("cmd", StringComparison.OrdinalIgnoreCase);
+            || executableBaseName.Equals("cmd", StringComparison.OrdinalIgnoreCase)
+            || executableBaseName.Equals("bash", StringComparison.OrdinalIgnoreCase)
+            || executableBaseName.Equals("sh", StringComparison.OrdinalIgnoreCase)
+            || executableBaseName.Equals("zsh", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsPowerShellHost(string fileName)
+    {
+        var executableName = Path.GetFileNameWithoutExtension(fileName);
+        return string.Equals(executableName, "pwsh", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(executableName, "powershell", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ContainsOrdinalIgnoreCase(string source, string value)
@@ -1337,12 +1509,85 @@ public sealed class ServiceManager(string configFilePath)
             string.Equals(extension, ".ps1", StringComparison.OrdinalIgnoreCase)
             || string.Equals(extension, ".cmd", StringComparison.OrdinalIgnoreCase)
             || string.Equals(extension, ".bat", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".sh", StringComparison.OrdinalIgnoreCase)
         )
         {
             return ResolvePath(executable, config.WorkingDirectory);
         }
 
         return null;
+    }
+
+    private async Task HandleManagedProcessExitedAsync(
+        ServiceInfo serviceInfo,
+        Process exitedProcess,
+        int exitCode
+    )
+    {
+        serviceInfo.AppendOutput($"进程已退出，退出代码: {exitCode}{Environment.NewLine}");
+
+        var exitedProcessId = exitedProcess.Id;
+        var switchedToPortManagedMode = false;
+
+        if (serviceInfo.Config.Ports.Count > 0)
+        {
+            switchedToPortManagedMode = await WaitForConfiguredPortAsync(
+                serviceInfo.Config.Ports,
+                timeout: TimeSpan.FromSeconds(12),
+                pollInterval: TimeSpan.FromMilliseconds(250)
+            );
+        }
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            // 退出回调可能晚于后续重启流程，避免旧事件覆盖新状态。
+            if (serviceInfo.Process != exitedProcess && serviceInfo.ProcessId != exitedProcessId)
+            {
+                return;
+            }
+
+            if (switchedToPortManagedMode)
+            {
+                serviceInfo.Status = ServiceStatus.Running;
+                serviceInfo.Process = null;
+                serviceInfo.ProcessId = Environment.ProcessId;
+                serviceInfo.IsExternal = false;
+                serviceInfo.AppendOutput(
+                    $"检测到托管子进程接管端口，已切换为端口托管模式。{Environment.NewLine}"
+                );
+                return;
+            }
+
+            serviceInfo.Status = ServiceStatus.Stopped;
+            serviceInfo.Process = null;
+            serviceInfo.ProcessId = null;
+            serviceInfo.IsExternal = false;
+        });
+    }
+
+    private static async Task<bool> WaitForConfiguredPortAsync(
+        IReadOnlyList<int> ports,
+        TimeSpan timeout,
+        TimeSpan pollInterval
+    )
+    {
+        if (ports.Count == 0)
+        {
+            return false;
+        }
+
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (ports.Any(IsPortInUse))
+            {
+                return true;
+            }
+
+            await Task.Delay(pollInterval);
+        }
+
+        return ports.Any(IsPortInUse);
     }
 
     /// <summary>
@@ -1371,6 +1616,14 @@ public sealed class ServiceManager(string configFilePath)
             var scriptPath = ResolvePath(executable, config.WorkingDirectory);
             var cmdArguments = $"/c \"\"{scriptPath}\" {arguments}\"".Trim();
             return ("cmd.exe", cmdArguments);
+        }
+
+        if (string.Equals(extension, ".sh", StringComparison.OrdinalIgnoreCase))
+        {
+            var scriptPath = ResolvePath(executable, config.WorkingDirectory);
+            var host = FindExecutableInPath("bash") ?? FindExecutableInPath("sh") ?? "sh";
+            var hostArguments = $"\"{scriptPath}\" {arguments}".Trim();
+            return (host, hostArguments);
         }
 
         return (executable, arguments);
@@ -1414,12 +1667,65 @@ public sealed class ServiceManager(string configFilePath)
                     return candidate;
                 }
             }
-            catch
+            catch (Exception ex)
             {
                 // 路径项无效或不可访问
+                Log.Warning(
+                    ex,
+                    "Invalid or inaccessible PATH segment encountered: {PathSegment}",
+                    path
+                );
             }
         }
 
         return null;
+    }
+
+    private static bool IsAspNetCoreService(ServiceConfig config)
+    {
+        var workingDirectory = config.WorkingDirectory;
+        if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
+        {
+            return false;
+        }
+
+        if (File.Exists(Path.Combine(workingDirectory, "appsettings.json")))
+        {
+            return true;
+        }
+
+        if (File.Exists(Path.Combine(workingDirectory, "Properties", "launchSettings.json")))
+        {
+            return true;
+        }
+
+        foreach (var csprojPath in Directory.EnumerateFiles(workingDirectory, "*.csproj"))
+        {
+            try
+            {
+                var content = File.ReadAllText(csprojPath);
+                if (
+                    content.Contains("Microsoft.NET.Sdk.Web", StringComparison.OrdinalIgnoreCase)
+                    || content.Contains(
+                        "Microsoft.AspNetCore.App",
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
+                {
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                // 忽略单个项目文件读取失败
+                Log.Warning(
+                    ex,
+                    "Failed to inspect project file for ASP.NET detection: {ProjectFile}",
+                    csprojPath
+                );
+            }
+        }
+
+        return false;
     }
 }

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Dpz.ServiceHub.Models;
+using Serilog;
 
 namespace Dpz.ServiceHub.Services;
 
@@ -25,8 +26,9 @@ public sealed class AppSettingsStore
             var settings = JsonSerializer.Deserialize<AppSettings>(json);
             return settings ?? new AppSettings();
         }
-        catch
+        catch (Exception ex)
         {
+            Log.Warning(ex, "Failed to load app settings from {SettingsPath}.", _settingsPath);
             return new AppSettings();
         }
     }
@@ -59,9 +61,9 @@ public sealed class AppSettingsStore
 
             File.WriteAllText(_settingsPath, json);
         }
-        catch
+        catch (Exception ex)
         {
-            // Ignore settings persistence failures.
+            Log.Warning(ex, "Failed to persist app settings to {SettingsPath}.", _settingsPath);
         }
     }
 

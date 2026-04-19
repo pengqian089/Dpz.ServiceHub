@@ -1,39 +1,59 @@
-﻿using Avalonia;
+﻿using System.Text.Json;
 using Avalonia.Controls;
 using Avalonia.Platform;
-using AvaloniaEdit;
-using AvaloniaEdit.Editing;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.Input;
-using Dpz.ServiceHub.Controls;
 using Dpz.ServiceHub.Models;
 using Dpz.ServiceHub.Services;
 using Dpz.ServiceHub.ViewModels;
+using Serilog;
 
 namespace Dpz.ServiceHub.Views;
 
 public partial class MainWindow : Window
 {
     private readonly AppSettingsStore _appSettingsStore = new();
-    private readonly TextEditor? _consoleEditor;
+    private readonly NativeWebView? _consoleWebView;
+    private readonly ListBox? _serviceList;
     private readonly TrayIcon? _trayIcon;
     private MainWindowViewModel? _viewModel;
     private ServiceInfo? _selectedService;
-    private string _lastRenderedOutput = string.Empty;
-    private bool _forceFullRender = true;
     private bool _allowClose;
     private bool _isClosingFlowRunning;
     private bool _minimizeToTray;
+    private bool _terminalReady;
+    private string _lastRenderedOutput = string.Empty;
+    private bool _isUpdatingTerminal;
+    private DispatcherTimer? _updateDebounceTimer;
+    private string _pendingOutput = string.Empty;
+    private CancellationTokenSource? _shutdownFlowCancellationTokenSource;
+    private bool _isInTrayMode;
 
     public MainWindow()
     {
         InitializeComponent();
         RestoreWindowBounds();
 
-        _consoleEditor = this.FindControl<TextEditor>("ConsoleEditor");
-        if (_consoleEditor != null)
+        _consoleWebView = this.FindControl<NativeWebView>("ConsoleWebView");
+        _serviceList = this.FindControl<ListBox>("ServiceList");
+        if (_consoleWebView != null)
         {
-            _consoleEditor.Options = new TextEditorOptions { AllowScrollBelowDocument = false };
-            _consoleEditor.TextArea.TextView.LineTransformers.Add(new ServiceLogColorizer());
+            _consoleWebView.Focusable = false;
+            _consoleWebView.IsTabStop = false;
+
+            // 加载终端HTML页面
+            var terminalHtmlPath = Path.Combine(
+                AppContext.BaseDirectory,
+                "Assets",
+                "terminal.html"
+            );
+
+            if (File.Exists(terminalHtmlPath))
+            {
+                // 使用file://协议加载本地HTML文件
+                var fileUri = new Uri($"file:///{terminalHtmlPath.Replace("\\", "/")}");
+                _consoleWebView.Navigate(fileUri);
+            }
         }
 
         // 创建托盘图标
@@ -65,6 +85,11 @@ public partial class MainWindow : Window
         };
         _trayIcon.Clicked += (_, _) => OnTrayIconClicked(null, EventArgs.Empty);
 
+        // 初始化防抖定时器（50ms延迟，避免快速更新导致闪烁）
+        _updateDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+        _updateDebounceTimer.Tick += OnDebounceTimerTick;
+
+        Activated += OnWindowActivated;
         DataContextChanged += OnDataContextChanged;
     }
 
@@ -72,10 +97,54 @@ public partial class MainWindow : Window
     {
         PersistWindowBounds();
 
+        // 清理定时器
+        if (_updateDebounceTimer != null)
+        {
+            _updateDebounceTimer.Stop();
+            _updateDebounceTimer.Tick -= OnDebounceTimerTick;
+            _updateDebounceTimer = null;
+        }
+
         // 清理托盘图标
         _trayIcon?.Dispose();
 
+        if (_shutdownFlowCancellationTokenSource != null)
+        {
+            _shutdownFlowCancellationTokenSource.Cancel();
+            _shutdownFlowCancellationTokenSource.Dispose();
+            _shutdownFlowCancellationTokenSource = null;
+        }
+
+        Activated -= OnWindowActivated;
+
         base.OnClosed(e);
+    }
+
+    private void OnWindowActivated(object? sender, EventArgs e)
+    {
+        // 避免任务栏恢复时焦点直接落入 WebView2，降低 MoveFocus 触发概率。
+        if (_serviceList == null || _isInTrayMode)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                try
+                {
+                    if (_serviceList.IsVisible && _serviceList.IsEffectivelyEnabled)
+                    {
+                        _serviceList.Focus();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Failed to apply activation focus guard.");
+                }
+            },
+            DispatcherPriority.Background
+        );
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)
@@ -112,16 +181,18 @@ public partial class MainWindow : Window
         }
 
         _selectedService = service;
+        _lastRenderedOutput = string.Empty;
 
         if (_selectedService != null)
         {
             _selectedService.PropertyChanged += OnSelectedServicePropertyChanged;
         }
 
-        _lastRenderedOutput = string.Empty;
-        _forceFullRender = true;
-
-        UpdateEditorText();
+        // 如果终端已准备就绪，立即更新显示
+        if (_terminalReady)
+        {
+            UpdateTerminalDisplay();
+        }
     }
 
     private void OnSelectedServicePropertyChanged(
@@ -129,67 +200,167 @@ public partial class MainWindow : Window
         System.ComponentModel.PropertyChangedEventArgs e
     )
     {
-        if (e.PropertyName == nameof(ServiceInfo.OutputText))
+        if (e.PropertyName == nameof(ServiceInfo.OutputText) && _terminalReady)
         {
-            UpdateEditorText();
+            // 使用防抖机制，避免快速连续更新导致闪烁和重复
+            _pendingOutput = _selectedService?.OutputText ?? string.Empty;
+
+            if (_isInTrayMode)
+            {
+                return;
+            }
+
+            // 重启定时器
+            _updateDebounceTimer?.Stop();
+            _updateDebounceTimer?.Start();
         }
     }
 
-    private void UpdateEditorText()
+    /// <summary>
+    /// 防抖定时器触发 - 执行实际的终端更新
+    /// </summary>
+    private void OnDebounceTimerTick(object? sender, EventArgs e)
     {
-        if (_consoleEditor == null)
+        _updateDebounceTimer?.Stop();
+
+        if (_isUpdatingTerminal)
         {
             return;
         }
 
-        var wasAtBottom = IsAtBottom();
+        var currentOutput = _pendingOutput;
 
-        var currentOutput = _selectedService?.OutputText ?? string.Empty;
-        if (currentOutput.Length == 0)
+        // 检测清空操作（OutputText变为空）
+        if (string.IsNullOrEmpty(currentOutput) && !string.IsNullOrEmpty(_lastRenderedOutput))
         {
-            _consoleEditor.Clear();
-            _lastRenderedOutput = string.Empty;
-            _forceFullRender = false;
+            // 清空终端
+            UpdateTerminalDisplay();
             return;
         }
 
-        if (_forceFullRender)
+        // 空输出不处理
+        if (string.IsNullOrEmpty(currentOutput))
         {
-            _consoleEditor.Text = currentOutput;
-            _lastRenderedOutput = currentOutput;
-            _forceFullRender = false;
+            return;
         }
-        else if (currentOutput.StartsWith(_lastRenderedOutput, StringComparison.Ordinal))
+
+        // 增量更新
+        if (
+            !string.IsNullOrEmpty(_lastRenderedOutput)
+            && currentOutput.StartsWith(_lastRenderedOutput, StringComparison.Ordinal)
+            && currentOutput.Length > _lastRenderedOutput.Length
+        )
         {
             var delta = currentOutput[_lastRenderedOutput.Length..];
-            if (!string.IsNullOrEmpty(delta))
+            WriteToTerminal(delta, forceFullWrite: false);
+        }
+        else if (currentOutput != _lastRenderedOutput)
+        {
+            // 内容不连续或完全不同，全量更新
+            UpdateTerminalDisplay();
+        }
+    }
+
+    /// <summary>
+    /// WebView 导航完成事件
+    /// </summary>
+    private void OnWebViewNavigationCompleted(object? sender, WebViewNavigationCompletedEventArgs e)
+    {
+        // 导航成功后，终端会通过 invokeCSharpAction('terminal-ready') 通知准备就绪
+    }
+
+    /// <summary>
+    /// WebView 消息接收事件
+    /// </summary>
+    private void OnWebViewMessageReceived(object? sender, WebMessageReceivedEventArgs e)
+    {
+        if (e.Body == "terminal-ready")
+        {
+            _terminalReady = true;
+            // 终端准备就绪，更新当前选中服务的输出
+            UpdateTerminalDisplay();
+        }
+    }
+
+    /// <summary>
+    /// 更新终端显示（全量刷新）
+    /// </summary>
+    private async void UpdateTerminalDisplay()
+    {
+        if (_consoleWebView == null || !_terminalReady || _isUpdatingTerminal || _isInTrayMode)
+        {
+            return;
+        }
+
+        try
+        {
+            _isUpdatingTerminal = true;
+            var currentOutput = _selectedService?.OutputText ?? string.Empty;
+
+            // 使用terminalReset+write避免闪烁，比clear+write更流畅
+            if (string.IsNullOrEmpty(currentOutput))
             {
-                _consoleEditor.AppendText(delta);
+                await _consoleWebView.InvokeScript("window.terminalClear()");
+                _lastRenderedOutput = string.Empty;
+            }
+            else
+            {
+                var escapedText = JsonSerializer.Serialize(currentOutput);
+                // 一次性清空并写入，减少闪烁
+                await _consoleWebView.InvokeScript(
+                    $"window.terminalReset(); window.terminalWrite({escapedText});"
+                );
                 _lastRenderedOutput = currentOutput;
             }
         }
-        else
+        catch (Exception ex)
         {
-            _consoleEditor.Text = currentOutput;
-            _lastRenderedOutput = currentOutput;
+            System.Diagnostics.Debug.WriteLine($"更新终端显示失败: {ex.Message}");
+            Log.Error(ex, "Failed to update terminal display.");
         }
-
-        if (wasAtBottom)
+        finally
         {
-            _consoleEditor.CaretOffset = _consoleEditor.Document?.TextLength ?? 0;
-            _consoleEditor.ScrollToEnd();
+            _isUpdatingTerminal = false;
         }
     }
 
-    private bool IsAtBottom()
+    /// <summary>
+    /// 向终端写入文本（增量）
+    /// </summary>
+    private async void WriteToTerminal(string text, bool forceFullWrite = false)
     {
-        if (_consoleEditor == null)
+        if (
+            _consoleWebView == null
+            || !_terminalReady
+            || _isInTrayMode
+            || string.IsNullOrEmpty(text)
+            || _isUpdatingTerminal
+        )
         {
-            return true;
+            return;
         }
 
-        var maxOffset = Math.Max(0, _consoleEditor.ExtentHeight - _consoleEditor.ViewportHeight);
-        return _consoleEditor.VerticalOffset >= maxOffset - 1;
+        try
+        {
+            // JavaScript转义
+            var escapedText = JsonSerializer.Serialize(text);
+            await _consoleWebView.InvokeScript($"window.terminalWrite({escapedText})");
+
+            // 更新已渲染的文本
+            if (forceFullWrite)
+            {
+                _lastRenderedOutput = text;
+            }
+            else
+            {
+                _lastRenderedOutput += text;
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"写入终端失败: {ex.Message}");
+            Log.Error(ex, "Failed to write incremental terminal output.");
+        }
     }
 
     protected override void OnClosing(WindowClosingEventArgs e)
@@ -205,35 +376,33 @@ public partial class MainWindow : Window
         if (_minimizeToTray)
         {
             e.Cancel = true;
+            EnterTrayMode();
             Hide();
             _minimizeToTray = false;
             return;
         }
 
-        if (_consoleEditor != null)
+        if (_isClosingFlowRunning)
         {
-            if (_isClosingFlowRunning)
-            {
-                // 停止流程进行中，屏蔽再次关闭请求，避免状态竞争。
-                e.Cancel = true;
-                return;
-            }
-
-            if (_viewModel == null)
-            {
-                return;
-            }
-
-            var runningServices = _viewModel.GetManagedRunningServices();
-            if (runningServices.Count == 0)
-            {
-                return;
-            }
-
+            // 停止流程进行中，屏蔽再次关闭请求，避免状态竞争。
             e.Cancel = true;
-            _isClosingFlowRunning = true;
-            _ = HandleCloseWithConfirmationAsync(runningServices);
+            return;
         }
+
+        if (_viewModel == null)
+        {
+            return;
+        }
+
+        var runningServices = _viewModel.GetManagedRunningServices();
+        if (runningServices.Count == 0)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        _isClosingFlowRunning = true;
+        _ = HandleCloseWithConfirmationAsync(runningServices);
     }
 
     private async Task HandleCloseWithConfirmationAsync(IReadOnlyList<ServiceInfo> runningServices)
@@ -254,11 +423,35 @@ public partial class MainWindow : Window
                 IsEnabled = false;
                 try
                 {
-                    await _viewModel.StopManagedRunningServicesAsync();
+                    _shutdownFlowCancellationTokenSource?.Cancel();
+                    _shutdownFlowCancellationTokenSource?.Dispose();
+                    _shutdownFlowCancellationTokenSource = new CancellationTokenSource(
+                        TimeSpan.FromSeconds(45)
+                    );
+
+                    var allStopped = await _viewModel.StopManagedRunningServicesAsync(
+                        _shutdownFlowCancellationTokenSource.Token
+                    );
+
+                    if (!allStopped || _viewModel.GetManagedRunningServices().Count > 0)
+                    {
+                        return;
+                    }
                 }
-                catch
+                catch (OperationCanceledException ex)
                 {
-                    // 即使停止过程中出现异常，也继续退出，避免窗口卡住无法关闭。
+                    Log.Warning(ex, "Shutdown flow canceled while stopping services before exit.");
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "Failed to stop all managed services during shutdown flow.");
+                    return;
+                }
+                finally
+                {
+                    _shutdownFlowCancellationTokenSource?.Dispose();
+                    _shutdownFlowCancellationTokenSource = null;
                 }
             }
 
@@ -267,8 +460,11 @@ public partial class MainWindow : Window
         }
         finally
         {
-            IsEnabled = true;
-            _isClosingFlowRunning = false;
+            if (!_allowClose)
+            {
+                IsEnabled = true;
+                _isClosingFlowRunning = false;
+            }
         }
     }
 
@@ -324,9 +520,11 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnShowWindowClicked(object? sender, EventArgs e)
     {
+        ExitTrayMode();
         Show();
         WindowState = WindowState.Normal;
         Activate();
+        UpdateTerminalDisplay();
     }
 
     /// <summary>
@@ -352,5 +550,32 @@ public partial class MainWindow : Window
         // 没有运行中的服务，直接退出
         _allowClose = true;
         Close();
+    }
+
+    private void EnterTrayMode()
+    {
+        _isInTrayMode = true;
+        _updateDebounceTimer?.Stop();
+
+        if (_consoleWebView == null)
+        {
+            return;
+        }
+
+        _consoleWebView.IsEnabled = false;
+        _consoleWebView.IsVisible = false;
+    }
+
+    private void ExitTrayMode()
+    {
+        _isInTrayMode = false;
+
+        if (_consoleWebView == null)
+        {
+            return;
+        }
+
+        _consoleWebView.IsVisible = true;
+        _consoleWebView.IsEnabled = true;
     }
 }
