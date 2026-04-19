@@ -1,5 +1,6 @@
 ﻿using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Reflection;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -19,6 +20,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private AppSettings _currentSettings;
     private CancellationTokenSource _refreshCancellationTokenSource = new();
     private int _stopOperationCount;
+    private static readonly (string Version, string Hash) AppBuildInfo = ResolveAppBuildInfo();
 
     [ObservableProperty]
     private ServiceInfo? _selectedService;
@@ -29,7 +31,32 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     private bool _isStoppingServices;
 
-    public string StatusBarText => IsStoppingServices ? "停止中..." : "就绪";
+    public string StatusBarText =>
+        $"{(IsStoppingServices ? "停止中..." : "就绪")} | Version {AppBuildInfo.Version} | Hash {AppBuildInfo.Hash}";
+
+    private static (string Version, string Hash) ResolveAppBuildInfo()
+    {
+        var assembly = Assembly.GetEntryAssembly() ?? Assembly.GetExecutingAssembly();
+        var informationalVersion = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion;
+
+        if (!string.IsNullOrWhiteSpace(informationalVersion))
+        {
+            var metadataIndex = informationalVersion.IndexOf('+');
+            if (metadataIndex > 0)
+            {
+                var version = informationalVersion[..metadataIndex];
+                var hash = informationalVersion[(metadataIndex + 1)..];
+                return (version, string.IsNullOrWhiteSpace(hash) ? "-" : hash);
+            }
+
+            return (informationalVersion, "-");
+        }
+
+        var assemblyVersion = assembly.GetName().Version?.ToString();
+        return (string.IsNullOrWhiteSpace(assemblyVersion) ? "Unknown" : assemblyVersion, "-");
+    }
 
     public MainWindowViewModel()
     {
@@ -104,7 +131,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Failed to determine managed running state for service {ServiceName}.", service.Config.Name);
+            Log.Warning(
+                ex,
+                "Failed to determine managed running state for service {ServiceName}.",
+                service.Config.Name
+            );
             return false;
         }
     }
