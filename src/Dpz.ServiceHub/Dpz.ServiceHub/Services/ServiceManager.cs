@@ -56,7 +56,11 @@ public sealed class ServiceManager(string configFilePath)
         {
             // 加载配置失败可能是首次运行或文件损坏，记录日志后继续
             Debug.WriteLine($"加载配置失败: {ex.Message}");
-            Log.Error(ex, "Failed to load service configuration from {ConfigPath}.", _configFilePath);
+            Log.Error(
+                ex,
+                "Failed to load service configuration from {ConfigPath}.",
+                _configFilePath
+            );
         }
     }
 
@@ -230,6 +234,22 @@ public sealed class ServiceManager(string configFilePath)
 
                 Dispatcher.UIThread.Post(() =>
                 {
+                    var switchedToPortManagedMode =
+                        serviceInfo.Config.Ports.Count > 0
+                        && serviceInfo.Config.Ports.Any(IsPortInUse);
+
+                    if (switchedToPortManagedMode)
+                    {
+                        serviceInfo.Status = ServiceStatus.Running;
+                        serviceInfo.Process = null;
+                        serviceInfo.ProcessId = Environment.ProcessId;
+                        serviceInfo.IsExternal = false;
+                        serviceInfo.AppendOutput(
+                            $"检测到托管子进程继续运行，已切换为端口托管模式。{Environment.NewLine}"
+                        );
+                        return;
+                    }
+
                     serviceInfo.Status = ServiceStatus.Stopped;
                     serviceInfo.Process = null;
                     serviceInfo.ProcessId = null;
@@ -403,7 +423,11 @@ public sealed class ServiceManager(string configFilePath)
                         serviceInfo.AppendOutput(
                             $"停止进程时出错: {ex.Message}{Environment.NewLine}"
                         );
-                        Log.Error(ex, "Failed while stopping service process for {ServiceName}.", serviceInfo.Config.Name);
+                        Log.Error(
+                            ex,
+                            "Failed while stopping service process for {ServiceName}.",
+                            serviceInfo.Config.Name
+                        );
                     }
                 }
             }
@@ -477,7 +501,11 @@ public sealed class ServiceManager(string configFilePath)
         {
             serviceInfo.AppendOutput($"停止已取消{Environment.NewLine}");
             serviceInfo.Status = ServiceStatus.Running;
-            Log.Warning(ex, "Stopping service {ServiceName} was canceled.", serviceInfo.Config.Name);
+            Log.Warning(
+                ex,
+                "Stopping service {ServiceName} was canceled.",
+                serviceInfo.Config.Name
+            );
             return false;
         }
         catch (Exception ex)
@@ -523,7 +551,11 @@ public sealed class ServiceManager(string configFilePath)
         catch (Exception ex)
         {
             serviceInfo.AppendOutput($"发送命令失败: {ex.Message}{Environment.NewLine}");
-            Log.Error(ex, "Failed to send command to service {ServiceName}.", serviceInfo.Config.Name);
+            Log.Error(
+                ex,
+                "Failed to send command to service {ServiceName}.",
+                serviceInfo.Config.Name
+            );
         }
     }
 
@@ -566,6 +598,7 @@ public sealed class ServiceManager(string configFilePath)
                     serviceInfo,
                     serviceInfo.Config,
                     serviceInfo.Status,
+                    serviceInfo.IsExecuting,
                     serviceInfo.IsExternal,
                     serviceInfo.ProcessId,
                     serviceInfo.Process != null
@@ -629,6 +662,12 @@ public sealed class ServiceManager(string configFilePath)
             foreach (var snapshot in snapshots)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+
+                // 托管启动/停止/重启期间由应用控制状态，不参与外部进程判定。
+                if (snapshot.IsExecuting)
+                {
+                    continue;
+                }
 
                 if (snapshot.IsExternal && snapshot.ProcessId.HasValue)
                 {
@@ -707,7 +746,11 @@ public sealed class ServiceManager(string configFilePath)
                     continue;
                 }
 
-                if (snapshot.Status == ServiceStatus.Running && snapshot.HasManagedProcess)
+                if (
+                    snapshot.Status == ServiceStatus.Running
+                    && !snapshot.IsExternal
+                    && (snapshot.HasManagedProcess || snapshot.ProcessId == Environment.ProcessId)
+                )
                 {
                     continue;
                 }
@@ -792,7 +835,11 @@ public sealed class ServiceManager(string configFilePath)
         catch (Exception ex)
         {
             // 进程获取失败，返回 null
-            Log.Warning(ex, "Failed to resolve matched process by PID: {ProcessId}.", matchedProcessId);
+            Log.Warning(
+                ex,
+                "Failed to resolve matched process by PID: {ProcessId}.",
+                matchedProcessId
+            );
             return null;
         }
     }
@@ -932,6 +979,7 @@ public sealed class ServiceManager(string configFilePath)
         ServiceInfo Service,
         ServiceConfig Config,
         ServiceStatus Status,
+        bool IsExecuting,
         bool IsExternal,
         int? ProcessId,
         bool HasManagedProcess
@@ -1560,7 +1608,11 @@ public sealed class ServiceManager(string configFilePath)
             catch (Exception ex)
             {
                 // 路径项无效或不可访问
-                Log.Warning(ex, "Invalid or inaccessible PATH segment encountered: {PathSegment}", path);
+                Log.Warning(
+                    ex,
+                    "Invalid or inaccessible PATH segment encountered: {PathSegment}",
+                    path
+                );
             }
         }
 
@@ -1604,11 +1656,14 @@ public sealed class ServiceManager(string configFilePath)
             catch (Exception ex)
             {
                 // 忽略单个项目文件读取失败
-                Log.Warning(ex, "Failed to inspect project file for ASP.NET detection: {ProjectFile}", csprojPath);
+                Log.Warning(
+                    ex,
+                    "Failed to inspect project file for ASP.NET detection: {ProjectFile}",
+                    csprojPath
+                );
             }
         }
 
         return false;
     }
-
 }
