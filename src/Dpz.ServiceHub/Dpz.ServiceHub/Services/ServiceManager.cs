@@ -225,33 +225,7 @@ public sealed class ServiceManager(string configFilePath)
 
             process.Exited += (sender, e) =>
             {
-                serviceInfo.AppendOutput(
-                    $"进程已退出，退出代码: {process.ExitCode}{Environment.NewLine}"
-                );
-
-                Dispatcher.UIThread.Post(() =>
-                {
-                    var switchedToPortManagedMode =
-                        serviceInfo.Config.Ports.Count > 0
-                        && serviceInfo.Config.Ports.Any(IsPortInUse);
-
-                    if (switchedToPortManagedMode)
-                    {
-                        serviceInfo.Status = ServiceStatus.Running;
-                        serviceInfo.Process = null;
-                        serviceInfo.ProcessId = Environment.ProcessId;
-                        serviceInfo.IsExternal = false;
-                        serviceInfo.AppendOutput(
-                            $"检测到托管子进程继续运行，已切换为端口托管模式。{Environment.NewLine}"
-                        );
-                        return;
-                    }
-
-                    serviceInfo.Status = ServiceStatus.Stopped;
-                    serviceInfo.Process = null;
-                    serviceInfo.ProcessId = null;
-                    serviceInfo.IsExternal = false;
-                });
+                _ = HandleManagedProcessExitedAsync(serviceInfo, process, process.ExitCode);
             };
 
             process.EnableRaisingEvents = true;
@@ -1542,6 +1516,78 @@ public sealed class ServiceManager(string configFilePath)
         }
 
         return null;
+    }
+
+    private async Task HandleManagedProcessExitedAsync(
+        ServiceInfo serviceInfo,
+        Process exitedProcess,
+        int exitCode
+    )
+    {
+        serviceInfo.AppendOutput($"进程已退出，退出代码: {exitCode}{Environment.NewLine}");
+
+        var exitedProcessId = exitedProcess.Id;
+        var switchedToPortManagedMode = false;
+
+        if (serviceInfo.Config.Ports.Count > 0)
+        {
+            switchedToPortManagedMode = await WaitForConfiguredPortAsync(
+                serviceInfo.Config.Ports,
+                timeout: TimeSpan.FromSeconds(12),
+                pollInterval: TimeSpan.FromMilliseconds(250)
+            );
+        }
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            // 退出回调可能晚于后续重启流程，避免旧事件覆盖新状态。
+            if (serviceInfo.Process != exitedProcess && serviceInfo.ProcessId != exitedProcessId)
+            {
+                return;
+            }
+
+            if (switchedToPortManagedMode)
+            {
+                serviceInfo.Status = ServiceStatus.Running;
+                serviceInfo.Process = null;
+                serviceInfo.ProcessId = Environment.ProcessId;
+                serviceInfo.IsExternal = false;
+                serviceInfo.AppendOutput(
+                    $"检测到托管子进程接管端口，已切换为端口托管模式。{Environment.NewLine}"
+                );
+                return;
+            }
+
+            serviceInfo.Status = ServiceStatus.Stopped;
+            serviceInfo.Process = null;
+            serviceInfo.ProcessId = null;
+            serviceInfo.IsExternal = false;
+        });
+    }
+
+    private static async Task<bool> WaitForConfiguredPortAsync(
+        IReadOnlyList<int> ports,
+        TimeSpan timeout,
+        TimeSpan pollInterval
+    )
+    {
+        if (ports.Count == 0)
+        {
+            return false;
+        }
+
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (ports.Any(IsPortInUse))
+            {
+                return true;
+            }
+
+            await Task.Delay(pollInterval);
+        }
+
+        return ports.Any(IsPortInUse);
     }
 
     /// <summary>
