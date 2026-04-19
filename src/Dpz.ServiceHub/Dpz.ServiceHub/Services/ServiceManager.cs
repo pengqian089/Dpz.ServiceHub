@@ -165,10 +165,7 @@ public sealed class ServiceManager(string configFilePath)
             }
 
             // PowerShell 特殊处理 - 强制UTF-8输出
-            if (
-                resolvedFileName.Contains("pwsh", StringComparison.OrdinalIgnoreCase)
-                || resolvedFileName.Contains("powershell", StringComparison.OrdinalIgnoreCase)
-            )
+            if (IsPowerShellHost(resolvedFileName))
             {
                 startInfo.EnvironmentVariables["POWERSHELL_TELEMETRY_OPTOUT"] = "1";
 
@@ -1248,7 +1245,17 @@ public sealed class ServiceManager(string configFilePath)
         return executableBaseName.Equals("dotnet", StringComparison.OrdinalIgnoreCase)
             || executableBaseName.Equals("pwsh", StringComparison.OrdinalIgnoreCase)
             || executableBaseName.Equals("powershell", StringComparison.OrdinalIgnoreCase)
-            || executableBaseName.Equals("cmd", StringComparison.OrdinalIgnoreCase);
+            || executableBaseName.Equals("cmd", StringComparison.OrdinalIgnoreCase)
+            || executableBaseName.Equals("bash", StringComparison.OrdinalIgnoreCase)
+            || executableBaseName.Equals("sh", StringComparison.OrdinalIgnoreCase)
+            || executableBaseName.Equals("zsh", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsPowerShellHost(string fileName)
+    {
+        var executableName = Path.GetFileNameWithoutExtension(fileName);
+        return string.Equals(executableName, "pwsh", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(executableName, "powershell", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ContainsOrdinalIgnoreCase(string source, string value)
@@ -1528,6 +1535,7 @@ public sealed class ServiceManager(string configFilePath)
             string.Equals(extension, ".ps1", StringComparison.OrdinalIgnoreCase)
             || string.Equals(extension, ".cmd", StringComparison.OrdinalIgnoreCase)
             || string.Equals(extension, ".bat", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".sh", StringComparison.OrdinalIgnoreCase)
         )
         {
             return ResolvePath(executable, config.WorkingDirectory);
@@ -1562,6 +1570,14 @@ public sealed class ServiceManager(string configFilePath)
             var scriptPath = ResolvePath(executable, config.WorkingDirectory);
             var cmdArguments = $"/c \"\"{scriptPath}\" {arguments}\"".Trim();
             return ("cmd.exe", cmdArguments);
+        }
+
+        if (string.Equals(extension, ".sh", StringComparison.OrdinalIgnoreCase))
+        {
+            var scriptPath = ResolvePath(executable, config.WorkingDirectory);
+            var host = FindExecutableInPath("bash") ?? FindExecutableInPath("sh") ?? "sh";
+            var hostArguments = $"\"{scriptPath}\" {arguments}".Trim();
+            return (host, hostArguments);
         }
 
         return (executable, arguments);
