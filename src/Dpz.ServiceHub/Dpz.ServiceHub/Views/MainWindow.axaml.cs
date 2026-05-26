@@ -28,6 +28,7 @@ public partial class MainWindow : Window
     private string _pendingOutput = string.Empty;
     private CancellationTokenSource? _shutdownFlowCancellationTokenSource;
     private bool _isInTrayMode;
+    private bool _isClosed;
 
     public MainWindow()
     {
@@ -369,6 +370,7 @@ public partial class MainWindow : Window
 
         if (_allowClose)
         {
+            _isClosed = true;
             return;
         }
 
@@ -391,12 +393,14 @@ public partial class MainWindow : Window
 
         if (_viewModel == null)
         {
+            _isClosed = true;
             return;
         }
 
         var runningServices = _viewModel.GetManagedRunningServices();
         if (runningServices.Count == 0)
         {
+            _isClosed = true;
             return;
         }
 
@@ -520,11 +524,25 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnShowWindowClicked(object? sender, EventArgs e)
     {
+        if (_isClosed)
+        {
+            Log.Warning("OnShowWindowClicked called but window is already closed. Ignoring.");
+            return;
+        }
+
         ExitTrayMode();
-        Show();
-        WindowState = WindowState.Normal;
-        Activate();
-        UpdateTerminalDisplay();
+        try
+        {
+            Show();
+            WindowState = WindowState.Normal;
+            Activate();
+            UpdateTerminalDisplay();
+        }
+        catch (InvalidOperationException ex)
+        {
+            Log.Error(ex, "Failed to show window in OnShowWindowClicked. Window may have been closed externally.");
+            _isClosed = true;
+        }
     }
 
     /// <summary>
@@ -538,6 +556,12 @@ public partial class MainWindow : Window
             var runningServices = _viewModel.GetManagedRunningServices();
             if (runningServices.Count > 0)
             {
+                if (_isClosed)
+                {
+                    Log.Warning("OnExitClicked called but window is already closed. Ignoring.");
+                    return;
+                }
+
                 // 先显示窗口，然后触发关闭流程
                 Show();
                 WindowState = WindowState.Normal;
