@@ -46,10 +46,13 @@ public sealed class ServiceManager(string configFilePath)
             }
 
             _services.Clear();
-            foreach (var config in configs.OrderBy(c => c.Order))
+            // 兼容旧版本配置：旧文件缺失或 Order 全为 0 时，OrderBy 是稳定排序，
+            // 会保留 JSON 数组的原始顺序；加载后统一重排为 0..n-1，避免后续保存时出现重复或空缺。
+            var orderedConfigs = configs.OrderBy(c => c.Order).ToList();
+            for (var i = 0; i < orderedConfigs.Count; i++)
             {
-                var serviceInfo = new ServiceInfo(config);
-                _services.Add(serviceInfo);
+                orderedConfigs[i].Order = i;
+                _services.Add(new ServiceInfo(orderedConfigs[i]));
             }
         }
         catch (Exception ex)
@@ -554,7 +557,62 @@ public sealed class ServiceManager(string configFilePath)
             await StopServiceAsync(serviceInfo, cancellationToken);
         }
 
-        return _services.Remove(serviceInfo);
+        var removed = _services.Remove(serviceInfo);
+        if (removed)
+        {
+            // 删除后重排 Order，保持 0..n-1 的紧凑序列。
+            for (var i = 0; i < _services.Count; i++)
+            {
+                _services[i].Config.Order = i;
+            }
+        }
+
+        return removed;
+    }
+
+    /// <summary>
+    /// 将服务移动到指定的目标位置（拖拽排序）。
+    /// targetIndex 是 UI 层根据放置指示线计算出的「插入位置」，即移除前的插入索引：
+    ///   0 表示放到列表最前面；_services.Count 表示放到列表最末尾。
+    /// </summary>
+    public async Task MoveServiceAsync(
+        ServiceInfo source,
+        int targetIndex,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var oldIndex = _services.IndexOf(source);
+        if (oldIndex < 0)
+        {
+            return;
+        }
+
+        if (targetIndex < 0)
+        {
+            targetIndex = 0;
+        }
+
+        if (targetIndex > _services.Count)
+        {
+            targetIndex = _services.Count;
+        }
+
+        // ObservableCollection.Move 的 newIndex 是「移除后」的索引，
+        // 因此当目标在原位置之后时需要减 1。
+        var newIndex = targetIndex > oldIndex ? targetIndex - 1 : targetIndex;
+        if (newIndex == oldIndex)
+        {
+            return;
+        }
+
+        _services.Move(oldIndex, newIndex);
+
+        for (var i = 0; i < _services.Count; i++)
+        {
+            _services[i].Config.Order = i;
+        }
+
+        await SaveConfigAsync(cancellationToken);
     }
 
     /// <summary>

@@ -1,7 +1,11 @@
 ﻿using System.Text.Json;
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using CommunityToolkit.Mvvm.Input;
 using Dpz.ServiceHub.Models;
 using Dpz.ServiceHub.Services;
@@ -12,9 +16,16 @@ namespace Dpz.ServiceHub.Views;
 
 public partial class MainWindow : Window
 {
+    // Avalonia 12 进程内强类型拖拽格式：仅在本进程的 DnD 中传递 ServiceInfo 引用，不做任何序列化。
+    private static readonly DataFormat<ServiceInfo> ServiceDragFormat =
+        DataFormat.CreateInProcessFormat<ServiceInfo>("Dpz.ServiceHub.ServiceInfo");
+
+    private const double DragThreshold = 5.0;
+
     private readonly AppSettingsStore _appSettingsStore = new();
     private readonly NativeWebView? _consoleWebView;
     private readonly ListBox? _serviceList;
+    private readonly Border? _dropIndicator;
     private readonly TrayIcon? _trayIcon;
     private MainWindowViewModel? _viewModel;
     private ServiceInfo? _selectedService;
@@ -30,6 +41,12 @@ public partial class MainWindow : Window
     private bool _isInTrayMode;
     private bool _isClosed;
 
+    // 拖拽排序状态
+    private Point? _dragStartPosition;
+    private ServiceInfo? _potentialDragService;
+    private PointerPressedEventArgs? _potentialDragTrigger;
+    private bool _isDragging;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -37,6 +54,35 @@ public partial class MainWindow : Window
 
         _consoleWebView = this.FindControl<NativeWebView>("ConsoleWebView");
         _serviceList = this.FindControl<ListBox>("ServiceList");
+        _dropIndicator = this.FindControl<Border>("DropIndicator");
+
+        if (_serviceList != null)
+        {
+            // Tunnel 阶段拿到指针按下事件，源头若是 Button 则跳过，避免与控制按钮冲突。
+            _serviceList.AddHandler(
+                InputElement.PointerPressedEvent,
+                OnServiceListPointerPressed,
+                RoutingStrategies.Tunnel,
+                handledEventsToo: true
+            );
+            _serviceList.AddHandler(
+                InputElement.PointerMovedEvent,
+                OnServiceListPointerMoved,
+                RoutingStrategies.Tunnel,
+                handledEventsToo: true
+            );
+            _serviceList.AddHandler(
+                InputElement.PointerReleasedEvent,
+                OnServiceListPointerReleased,
+                RoutingStrategies.Tunnel,
+                handledEventsToo: true
+            );
+            _serviceList.AddHandler(InputElement.PointerCaptureLostEvent, OnServiceListPointerCaptureLost);
+            _serviceList.AddHandler(DragDrop.DragOverEvent, OnServiceListDragOver);
+            _serviceList.AddHandler(DragDrop.DropEvent, OnServiceListDrop);
+            _serviceList.AddHandler(DragDrop.DragLeaveEvent, OnServiceListDragLeave);
+        }
+
         if (_consoleWebView != null)
         {
             _consoleWebView.Focusable = false;
@@ -601,5 +647,310 @@ public partial class MainWindow : Window
 
         _consoleWebView.IsVisible = true;
         _consoleWebView.IsEnabled = true;
+    }
+
+    // -------------------- 拖拽排序 --------------------
+
+    /// <summary>
+    /// 指针按下：记录潜在的拖拽起点。仅当左键、不在按钮内、且命中某个 ListBoxItem 时才追踪。
+    /// </summary>
+    private void OnServiceListPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (_serviceList == null)
+        {
+            return;
+        }
+
+        var properties = e.GetCurrentPoint(_serviceList).Properties;
+        if (!properties.IsLeftButtonPressed)
+        {
+            ResetPotentialDrag();
+            return;
+        }
+
+        // 点击在 Button 上时不触发拖拽，让控件原本的命令逻辑生效。
+        if (IsInsideButton(e.Source as Visual))
+        {
+            ResetPotentialDrag();
+            return;
+        }
+
+        var listBoxItem = FindAncestor<ListBoxItem>(e.Source as Visual);
+        if (listBoxItem?.DataContext is not ServiceInfo serviceInfo)
+        {
+            ResetPotentialDrag();
+            return;
+        }
+
+        _potentialDragService = serviceInfo;
+        _potentialDragTrigger = e;
+        _dragStartPosition = e.GetPosition(_serviceList);
+    }
+
+    /// <summary>
+    /// 指针移动：超过阈值时正式发起 DoDragDropAsync。
+    /// 使用按下事件作为 trigger 满足 Avalonia 12 的 API 约束，并避免一按下就触发拖拽。
+    /// </summary>
+    private async void OnServiceListPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (
+            _isDragging
+            || _serviceList == null
+            || _dragStartPosition is null
+            || _potentialDragService is null
+            || _potentialDragTrigger is null
+        )
+        {
+            return;
+        }
+
+        var properties = e.GetCurrentPoint(_serviceList).Properties;
+        if (!properties.IsLeftButtonPressed)
+        {
+            ResetPotentialDrag();
+            return;
+        }
+
+        var current = e.GetPosition(_serviceList);
+        var delta = current - _dragStartPosition.Value;
+        if (Math.Abs(delta.X) < DragThreshold && Math.Abs(delta.Y) < DragThreshold)
+        {
+            return;
+        }
+
+        var serviceToDrag = _potentialDragService;
+        var trigger = _potentialDragTrigger;
+        ResetPotentialDrag();
+        _isDragging = true;
+
+        try
+        {
+            var transfer = new DataTransfer();
+            transfer.Add(DataTransferItem.Create(ServiceDragFormat, serviceToDrag));
+            await DragDrop.DoDragDropAsync(trigger, transfer, DragDropEffects.Move);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Drag-drop operation failed for service {ServiceName}.", serviceToDrag.Config.Name);
+        }
+        finally
+        {
+            _isDragging = false;
+            HideDropIndicator();
+        }
+    }
+
+    private void OnServiceListPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        ResetPotentialDrag();
+    }
+
+    private void OnServiceListPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
+    {
+        ResetPotentialDrag();
+    }
+
+    /// <summary>
+    /// 拖拽悬停：根据指针位置计算插入索引并显示指示线。
+    /// </summary>
+    private void OnServiceListDragOver(object? sender, DragEventArgs e)
+    {
+        if (_serviceList == null || !e.DataTransfer.Contains(ServiceDragFormat))
+        {
+            e.DragEffects = DragDropEffects.None;
+            HideDropIndicator();
+            return;
+        }
+
+        e.DragEffects = DragDropEffects.Move;
+
+        var dropIndex = ComputeDropIndex(e.GetPosition(_serviceList).Y);
+        UpdateDropIndicator(dropIndex);
+    }
+
+    private void OnServiceListDragLeave(object? sender, RoutedEventArgs e)
+    {
+        HideDropIndicator();
+    }
+
+    /// <summary>
+    /// 放下：把服务移动到目标位置，由 ViewModel 负责持久化。
+    /// </summary>
+    private async void OnServiceListDrop(object? sender, DragEventArgs e)
+    {
+        try
+        {
+            if (
+                _serviceList == null
+                || _viewModel == null
+                || !e.DataTransfer.Contains(ServiceDragFormat)
+            )
+            {
+                return;
+            }
+
+            var dragged = e.DataTransfer.TryGetValue(ServiceDragFormat);
+            if (dragged is null)
+            {
+                return;
+            }
+
+            var dropIndex = ComputeDropIndex(e.GetPosition(_serviceList).Y);
+            await _viewModel.MoveServiceAsync(dragged, dropIndex);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Failed to handle drop for service reorder.");
+        }
+        finally
+        {
+            HideDropIndicator();
+        }
+    }
+
+    private void ResetPotentialDrag()
+    {
+        _dragStartPosition = null;
+        _potentialDragService = null;
+        _potentialDragTrigger = null;
+    }
+
+    /// <summary>
+    /// 根据 Y 坐标决定要插入到哪个索引（取每个 item 的中线作为分界）。
+    /// 返回值为「移除前」的插入索引：0 表示放到最前；Count 表示放到最后。
+    /// </summary>
+    private int ComputeDropIndex(double pointerY)
+    {
+        if (_serviceList == null || _viewModel == null)
+        {
+            return 0;
+        }
+
+        var count = _viewModel.Services.Count;
+        for (var i = 0; i < count; i++)
+        {
+            if (_serviceList.ContainerFromIndex(i) is not Control container)
+            {
+                continue;
+            }
+
+            var topInList = container.TranslatePoint(default, _serviceList);
+            if (topInList is null)
+            {
+                continue;
+            }
+
+            var middleY = topInList.Value.Y + container.Bounds.Height / 2;
+            if (pointerY < middleY)
+            {
+                return i;
+            }
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// 把指示线移动到指定插入索引对应的 Y 位置。
+    /// 当 dropIndex == Count 时，指示线显示在最后一项的下边缘。
+    /// </summary>
+    private void UpdateDropIndicator(int dropIndex)
+    {
+        if (_dropIndicator is null || _serviceList is null || _viewModel is null)
+        {
+            return;
+        }
+
+        var count = _viewModel.Services.Count;
+        if (count == 0)
+        {
+            HideDropIndicator();
+            return;
+        }
+
+        double y;
+        if (dropIndex >= count)
+        {
+            if (_serviceList.ContainerFromIndex(count - 1) is not Control lastContainer)
+            {
+                HideDropIndicator();
+                return;
+            }
+
+            var topInList = lastContainer.TranslatePoint(default, _serviceList);
+            if (topInList is null)
+            {
+                HideDropIndicator();
+                return;
+            }
+
+            y = topInList.Value.Y + lastContainer.Bounds.Height - 1;
+        }
+        else
+        {
+            if (_serviceList.ContainerFromIndex(dropIndex) is not Control targetContainer)
+            {
+                HideDropIndicator();
+                return;
+            }
+
+            var topInList = targetContainer.TranslatePoint(default, _serviceList);
+            if (topInList is null)
+            {
+                HideDropIndicator();
+                return;
+            }
+
+            y = topInList.Value.Y;
+        }
+
+        if (y < 0)
+        {
+            y = 0;
+        }
+
+        _dropIndicator.Margin = new Thickness(0, y, 0, 0);
+        _dropIndicator.IsVisible = true;
+    }
+
+    private void HideDropIndicator()
+    {
+        if (_dropIndicator != null)
+        {
+            _dropIndicator.IsVisible = false;
+        }
+    }
+
+    private static bool IsInsideButton(Visual? source)
+    {
+        var current = source;
+        while (current != null)
+        {
+            if (current is Button)
+            {
+                return true;
+            }
+
+            current = current.GetVisualParent();
+        }
+
+        return false;
+    }
+
+    private static T? FindAncestor<T>(Visual? source)
+        where T : class
+    {
+        var current = source;
+        while (current != null)
+        {
+            if (current is T match)
+            {
+                return match;
+            }
+
+            current = current.GetVisualParent();
+        }
+
+        return null;
     }
 }

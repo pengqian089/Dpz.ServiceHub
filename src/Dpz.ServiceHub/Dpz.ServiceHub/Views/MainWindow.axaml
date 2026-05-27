@@ -127,11 +127,12 @@
                                Margin="12,12,12,8"
                                Foreground="#CCCCCC"/>
 
-                    <ListBox Grid.Row="1"
-                             Name="ServiceList"
+                    <Grid Grid.Row="1">
+                    <ListBox Name="ServiceList"
                              Classes="service-list"
                              ItemsSource="{Binding Services}"
-                             SelectedItem="{Binding SelectedService, Mode=TwoWay}">
+                             SelectedItem="{Binding SelectedService, Mode=TwoWay}"
+                             DragDrop.AllowDrop="True">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <Border Background="{Binding $parent[ListBoxItem].Background}"
@@ -243,6 +244,16 @@
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
+
+                    <!-- 拖拽排序时显示的插入位置指示线 -->
+                    <Border Name="DropIndicator"
+                            Height="2"
+                            Background="#0078D4"
+                            IsHitTestVisible="False"
+                            IsVisible="False"
+                            VerticalAlignment="Top"
+                            HorizontalAlignment="Stretch"/>
+                    </Grid>
 
                     <!-- 底部操作按钮 -->
                     <StackPanel Grid.Row="2"

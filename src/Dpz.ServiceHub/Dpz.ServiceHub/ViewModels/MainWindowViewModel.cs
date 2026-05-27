@@ -438,6 +438,18 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         await _serviceManager.SaveConfigAsync();
     }
 
+    /// <summary>
+    /// 拖拽排序时由视图层调用：把指定服务移动到 targetIndex 处（插入索引语义）。
+    /// </summary>
+    public async Task MoveServiceAsync(
+        ServiceInfo source,
+        int targetIndex,
+        CancellationToken cancellationToken = default
+    )
+    {
+        await _serviceManager.MoveServiceAsync(source, targetIndex, cancellationToken);
+    }
+
     [RelayCommand]
     private void SelectService(ServiceInfo? serviceInfo)
     {
