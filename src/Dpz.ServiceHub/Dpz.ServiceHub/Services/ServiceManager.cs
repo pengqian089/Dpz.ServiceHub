@@ -1626,6 +1626,35 @@ public sealed class ServiceManager(string configFilePath)
             return (host, hostArguments);
         }
 
+        // Windows 平台：用户输入的是不含扩展名、不含路径的裸命令名（如 npm/yarn/pnpm 等），
+        // CreateProcess 不会按 PATHEXT 自动解析 .cmd/.bat，需要先在 PATH 中定位真实文件。
+        // 找到 .cmd/.bat 时改由 cmd.exe /c 启动，保持与脚本分支一致的语义。
+        if (
+            OperatingSystem.IsWindows()
+            && string.IsNullOrEmpty(extension)
+            && !Path.IsPathRooted(executable)
+            && executable.IndexOfAny(
+                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]
+            ) < 0
+        )
+        {
+            var resolvedPath = FindExecutableInPath(executable);
+            if (!string.IsNullOrEmpty(resolvedPath))
+            {
+                var resolvedExtension = Path.GetExtension(resolvedPath);
+                if (
+                    string.Equals(resolvedExtension, ".cmd", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(resolvedExtension, ".bat", StringComparison.OrdinalIgnoreCase)
+                )
+                {
+                    var cmdArguments = $"/c \"\"{resolvedPath}\" {arguments}\"".Trim();
+                    return ("cmd.exe", cmdArguments);
+                }
+
+                return (resolvedPath, arguments);
+            }
+        }
+
         return (executable, arguments);
     }
 
@@ -1647,6 +1676,30 @@ public sealed class ServiceManager(string configFilePath)
             return null;
         }
 
+        // Windows 下用户给出的若是不带扩展名的命令（如 npm/yarn），按 PATHEXT 顺序探测；
+        // 否则只按用户给定的名字查找，避免误匹配。
+        string[] candidateExtensions;
+        if (OperatingSystem.IsWindows() && !Path.HasExtension(fileName))
+        {
+            var pathExt = Environment.GetEnvironmentVariable("PATHEXT");
+            if (!string.IsNullOrWhiteSpace(pathExt))
+            {
+                candidateExtensions = pathExt
+                    .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(ext => ext.Trim())
+                    .Where(ext => !string.IsNullOrEmpty(ext))
+                    .ToArray();
+            }
+            else
+            {
+                candidateExtensions = [".COM", ".EXE", ".BAT", ".CMD"];
+            }
+        }
+        else
+        {
+            candidateExtensions = [string.Empty];
+        }
+
         foreach (var path in pathVariable.Split(Path.PathSeparator))
         {
             if (string.IsNullOrWhiteSpace(path))
@@ -1656,15 +1709,13 @@ public sealed class ServiceManager(string configFilePath)
 
             try
             {
-                var candidate = Path.Combine(path, fileName);
-                if (OperatingSystem.IsWindows() && !Path.HasExtension(candidate))
+                foreach (var ext in candidateExtensions)
                 {
-                    candidate += ".exe";
-                }
-
-                if (File.Exists(candidate))
-                {
-                    return candidate;
+                    var candidate = Path.Combine(path, fileName + ext);
+                    if (File.Exists(candidate))
+                    {
+                        return candidate;
+                    }
                 }
             }
             catch (Exception ex)
