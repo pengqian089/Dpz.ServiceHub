@@ -216,7 +216,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task StartServiceAsync(ServiceInfo? serviceInfo)
     {
-        if (serviceInfo == null || serviceInfo.IsExecuting)
+        if (!TrySelectService(serviceInfo) || serviceInfo!.IsExecuting)
         {
             return;
         }
@@ -235,7 +235,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task StopServiceAsync(ServiceInfo? serviceInfo)
     {
-        if (serviceInfo == null || serviceInfo.IsExecuting)
+        if (!TrySelectService(serviceInfo) || serviceInfo!.IsExecuting)
         {
             return;
         }
@@ -256,7 +256,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task RestartServiceAsync(ServiceInfo? serviceInfo)
     {
-        if (serviceInfo == null || serviceInfo.IsExecuting)
+        if (!TrySelectService(serviceInfo) || serviceInfo!.IsExecuting)
         {
             return;
         }
@@ -390,12 +390,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task EditServiceAsync(ServiceInfo? serviceInfo)
     {
-        if (serviceInfo == null)
+        if (!TrySelectService(serviceInfo))
         {
             return;
         }
 
-        var vm = new ServiceEditViewModel(serviceInfo.Config);
+        var vm = new ServiceEditViewModel(serviceInfo!.Config);
         var window = new ServiceEditWindow { DataContext = vm, Title = "编辑服务配置" };
 
         var mainWindow = GetMainWindow();
@@ -423,12 +423,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task DeleteServiceAsync(ServiceInfo? serviceInfo)
     {
-        if (serviceInfo == null)
+        if (!TrySelectService(serviceInfo))
         {
             return;
         }
 
-        await _serviceManager.RemoveServiceAsync(serviceInfo);
+        await _serviceManager.RemoveServiceAsync(serviceInfo!);
+        if (SelectedService == serviceInfo)
+        {
+            SelectedService = Services.FirstOrDefault();
+        }
+
         await _serviceManager.SaveConfigAsync();
     }
 
@@ -459,6 +464,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private void OpenServiceUrl(ServiceInfo? serviceInfo)
     {
+        if (!TrySelectService(serviceInfo))
+        {
+            return;
+        }
+
         var url = serviceInfo?.Config.ServiceUrl;
         if (string.IsNullOrWhiteSpace(url))
         {
@@ -490,6 +500,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private void OpenServiceFolder(ServiceInfo? serviceInfo)
     {
+        if (!TrySelectService(serviceInfo))
+        {
+            return;
+        }
+
         var workingDirectory = serviceInfo?.Config.WorkingDirectory;
         if (string.IsNullOrWhiteSpace(workingDirectory))
         {
@@ -546,6 +561,17 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     partial void OnIsStoppingServicesChanged(bool value)
     {
         OnPropertyChanged(nameof(StatusBarText));
+    }
+
+    private bool TrySelectService(ServiceInfo? serviceInfo)
+    {
+        if (serviceInfo == null)
+        {
+            return false;
+        }
+
+        SelectedService = serviceInfo;
+        return true;
     }
 
     private void BeginStopProgress()
