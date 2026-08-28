@@ -1,0 +1,248 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Dpz.ServiceHub.ViewModels"
+        xmlns:models="using:Dpz.ServiceHub.Models"
+        xmlns:web="clr-namespace:Avalonia.Controls;assembly=Avalonia.Controls.WebView"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        x:Class="Dpz.ServiceHub.Views.FrontendBuildWindow"
+        x:DataType="vm:FrontendBuildViewModel"
+        Icon="/Assets/Dpz.ServiceHub.ico"
+        Title="前端构建"
+        Width="1080"
+        Height="760"
+        MinWidth="900"
+        MinHeight="640"
+        WindowStartupLocation="CenterOwner">
+
+    <Design.DataContext>
+        <vm:FrontendBuildViewModel/>
+    </Design.DataContext>
+
+    <Grid RowDefinitions="*,Auto,2*,Auto,Auto" Margin="16">
+        <Grid Grid.Row="0" ColumnDefinitions="240,*">
+            <Border Grid.Column="0"
+                    BorderBrush="#3E3E42"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Padding="8"
+                    Margin="0,0,12,0">
+                <Grid RowDefinitions="Auto,*,Auto">
+                    <TextBlock Grid.Row="0"
+                               Text="构建档案"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,8"/>
+                    <ListBox Grid.Row="1"
+                             ItemsSource="{Binding Profiles}"
+                             SelectedItem="{Binding SelectedProfile}"
+                             IsEnabled="{Binding !IsBusy}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="models:FrontendBuildProfile">
+                                <TextBlock Text="{Binding Name}" TextWrapping="NoWrap"/>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <StackPanel Grid.Row="2"
+                                Orientation="Horizontal"
+                                Spacing="8"
+                                Margin="0,8,0,0">
+                        <Button Content="添加"
+                                MinWidth="70"
+                                Command="{Binding AddProfileCommand}"
+                                IsEnabled="{Binding !IsBusy}"/>
+                        <Button Content="删除"
+                                MinWidth="70"
+                                Command="{Binding DeleteProfileCommand}"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="12" IsEnabled="{Binding IsEditorEnabled}">
+                    <TextBlock Text="构建配置" FontSize="16" FontWeight="SemiBold"/>
+
+                    <StackPanel>
+                        <TextBlock Text="名称" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding Name}" Padding="8"/>
+                    </StackPanel>
+
+                    <StackPanel>
+                        <TextBlock Text="工作目录" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBox Grid.Column="0"
+                                     Text="{Binding WorkingDirectory}"
+                                     Padding="8"
+                                     PlaceholderText="例如: C:\path\to\project"/>
+                            <Button Grid.Column="1"
+                                    Content="浏览..."
+                                    Margin="8,0,0,0"
+                                    Padding="12,6"
+                                    Click="OnBrowseWorkingDirectoryClick"/>
+                        </Grid>
+                    </StackPanel>
+
+                    <StackPanel>
+                        <TextBlock Text="可执行文件" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding Executable}"
+                                 Padding="8"
+                                 PlaceholderText="例如: pwsh 或 npm"/>
+                    </StackPanel>
+
+                    <StackPanel>
+                        <TextBlock Text="命令行参数" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding Arguments}"
+                                 Padding="8"
+                                 Height="64"
+                                 AcceptsReturn="True"
+                                 TextWrapping="Wrap"
+                                 PlaceholderText="例如: -NoProfile -File build.ps1 build"/>
+                    </StackPanel>
+
+                    <StackPanel>
+                        <TextBlock Text="产物路径（文件或目录）"
+                                   FontWeight="SemiBold"
+                                   Margin="0,0,0,4"/>
+                        <ListBox ItemsSource="{Binding ArtifactPaths}"
+                                 SelectedItem="{Binding SelectedArtifactPath}"
+                                 Height="90"/>
+                        <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+                            <Button Content="添加目录" Click="OnAddArtifactFolderClick"/>
+                            <Button Content="添加文件" Click="OnAddArtifactFileClick"/>
+                            <Button Content="移除"
+                                    Command="{Binding RemoveArtifactCommand}"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <TextBlock Text="S3 连接（本档案）"
+                               FontSize="16"
+                               FontWeight="SemiBold"
+                               Margin="0,8,0,0"/>
+
+                    <StackPanel>
+                        <TextBlock Text="Endpoint" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding S3Endpoint}"
+                                 Padding="8"
+                                 PlaceholderText="例如: https://cos.ap-guangzhou.myqcloud.com"/>
+                    </StackPanel>
+
+                    <Grid ColumnDefinitions="*,12,*">
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="Bucket" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                            <TextBox Text="{Binding S3Bucket}" Padding="8"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="Region（可空）"
+                                       FontWeight="SemiBold"
+                                       Margin="0,0,0,4"/>
+                            <TextBox Text="{Binding S3Region}"
+                                     Padding="8"
+                                     PlaceholderText="例如: ap-guangzhou"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid ColumnDefinitions="*,12,*">
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="Access Key / SecretId"
+                                       FontWeight="SemiBold"
+                                       Margin="0,0,0,4"/>
+                            <TextBox Text="{Binding AccessKey}" Padding="8"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="Secret Key"
+                                       FontWeight="SemiBold"
+                                       Margin="0,0,0,4"/>
+                            <TextBox Text="{Binding SecretKey}"
+                                     Padding="8"
+                                     PasswordChar="•"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <CheckBox IsChecked="{Binding S3ForcePathStyle}"
+                              Content="路径风格 ForcePathStyle（MinIO 等需勾选）"/>
+
+                    <StackPanel>
+                        <TextBlock Text="默认远程目录" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding DefaultRemotePrefix}"
+                                 Padding="8"
+                                 PlaceholderText="例如: auth-assets"/>
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <GridSplitter Grid.Row="1"
+                      Height="6"
+                      Background="#3E3E42"
+                      ResizeDirection="Rows"
+                      HorizontalAlignment="Stretch"/>
+
+        <Grid Grid.Row="2" RowDefinitions="Auto,*" Margin="0,4,0,0">
+            <TextBlock Grid.Row="0" Text="构建日志" FontWeight="SemiBold" Margin="0,0,0,4"/>
+            <Border Grid.Row="1" Background="#1E1E1E" BorderBrush="#3E3E42" BorderThickness="1">
+                <web:NativeWebView Name="BuildLogWebView"
+                                   Focusable="False"
+                                   IsTabStop="False"
+                                   x:CompileBindings="False"
+                                   NavigationCompleted="OnWebViewNavigationCompleted"
+                                   WebMessageReceived="OnWebViewMessageReceived"/>
+            </Border>
+        </Grid>
+
+        <StackPanel Grid.Row="3" Margin="0,12,0,0" IsVisible="{Binding IsUploading}">
+            <Grid ColumnDefinitions="Auto,*">
+                <TextBlock Grid.Column="0"
+                           Text="当前文件"
+                           Width="72"
+                           VerticalAlignment="Center"/>
+                <TextBlock Grid.Column="1"
+                           Text="{Binding CurrentFileName}"
+                           TextTrimming="CharacterEllipsis"
+                           VerticalAlignment="Center"/>
+            </Grid>
+            <ProgressBar Value="{Binding CurrentFileProgress}"
+                         Minimum="0"
+                         Maximum="100"
+                         Height="16"
+                         Margin="0,4,0,8"/>
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <TextBlock Grid.Column="0"
+                           Text="总进度"
+                           Width="72"
+                           VerticalAlignment="Center"/>
+                <ProgressBar Grid.Column="1"
+                             Value="{Binding TotalProgress}"
+                             Minimum="0"
+                             Maximum="100"
+                             Height="16"/>
+                <TextBlock Grid.Column="2"
+                           Text="{Binding ProgressText}"
+                           Margin="8,0,0,0"
+                           VerticalAlignment="Center"/>
+            </Grid>
+        </StackPanel>
+
+        <StackPanel Grid.Row="4"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8"
+                    Margin="0,16,0,0">
+            <Button Content="保存配置"
+                    MinWidth="90"
+                    Command="{Binding SaveCommand}"
+                    IsEnabled="{Binding !IsBusy}"/>
+            <Button Content="构建"
+                    MinWidth="90"
+                    Command="{Binding BuildCommand}"/>
+            <Button Content="构建并上传"
+                    MinWidth="100"
+                    Command="{Binding BuildAndUploadCommand}"/>
+            <Button Content="取消"
+                    MinWidth="80"
+                    Command="{Binding CancelCommand}"/>
+            <Button Content="关闭"
+                    MinWidth="80"
+                    Click="OnCloseClick"/>
+        </StackPanel>
+    </Grid>
+</Window>

@@ -339,6 +339,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     }
 
     [RelayCommand]
+    private async Task OpenFrontendBuildAsync()
+    {
+        var mainWindow = GetMainWindow();
+        if (mainWindow == null)
+        {
+            return;
+        }
+
+        var vm = new FrontendBuildViewModel();
+        var window = new FrontendBuildWindow { DataContext = vm };
+        await window.ShowDialog(mainWindow);
+    }
+
+    [RelayCommand]
     private async Task OpenSettingsAsync()
     {
         var currentSettings = _appSettingsStore.Load();
