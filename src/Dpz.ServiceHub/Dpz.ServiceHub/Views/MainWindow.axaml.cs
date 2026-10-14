@@ -50,6 +50,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Title = AdministratorStatus.IsAdministrator ? "服务控制面板（管理员）" : "服务控制面板";
         RestoreWindowBounds();
 
         _consoleWebView = this.FindControl<NativeWebView>("ConsoleWebView");

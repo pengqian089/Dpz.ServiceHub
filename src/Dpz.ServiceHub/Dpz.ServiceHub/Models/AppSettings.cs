@@ -24,4 +24,7 @@ public sealed class AppSettings
 
     [JsonPropertyName("maxOutputLines")]
     public int MaxOutputLines { get; set; } = 1000;
+
+    [JsonPropertyName("runAsAdministrator")]
+    public bool RunAsAdministrator { get; set; }
 }

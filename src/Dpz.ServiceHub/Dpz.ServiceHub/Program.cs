@@ -1,7 +1,7 @@
-﻿using System;
-using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
+﻿using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using System.Security.Principal;
 using Avalonia;
 using Avalonia.Threading;
 using Serilog;
@@ -19,6 +19,14 @@ namespace Dpz.ServiceHub
         [STAThread]
         public static void Main(string[] args)
         {
+            ConfigureLogging();
+            RegisterGlobalExceptionHandlers();
+
+            if (ShouldRestartAsAdministrator(args))
+            {
+                return;
+            }
+
             _singleInstanceMutex = new Mutex(
                 initiallyOwned: true,
                 SingleInstanceMutexName,
@@ -28,9 +36,6 @@ namespace Dpz.ServiceHub
             {
                 return;
             }
-
-            ConfigureLogging();
-            RegisterGlobalExceptionHandlers();
 
             try
             {
@@ -47,6 +52,63 @@ namespace Dpz.ServiceHub
                 _singleInstanceMutex?.Dispose();
                 Log.CloseAndFlush();
             }
+        }
+
+        private static bool ShouldRestartAsAdministrator(string[] args)
+        {
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                return false;
+            }
+
+            var settings = new Services.AppSettingsStore().Load();
+            if (!settings.RunAsAdministrator || IsRunningAsAdministrator())
+            {
+                return false;
+            }
+
+            var executablePath = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(executablePath))
+            {
+                Log.Warning("Unable to restart as administrator because the executable path is unavailable.");
+                return false;
+            }
+
+            try
+            {
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = executablePath,
+                    UseShellExecute = true,
+                    Verb = "runas",
+                };
+
+                foreach (var arg in args)
+                {
+                    startInfo.ArgumentList.Add(arg);
+                }
+
+                Process.Start(startInfo);
+                return true;
+            }
+            catch (System.ComponentModel.Win32Exception ex)
+            {
+                Log.Warning(ex, "Administrator permission was not granted; continuing without elevation.");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to restart application as administrator.");
+                return false;
+            }
+        }
+
+        [SupportedOSPlatform("windows")]
+        private static bool IsRunningAsAdministrator()
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            var principal = new WindowsPrincipal(identity);
+            return principal.IsInRole(WindowsBuiltInRole.Administrator);
         }
 
         private static void ConfigureLogging()

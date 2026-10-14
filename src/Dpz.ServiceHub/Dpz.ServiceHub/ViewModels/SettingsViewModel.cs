@@ -14,11 +14,15 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private int _maxOutputLines;
 
+    [ObservableProperty]
+    private bool _runAsAdministrator;
+
     public SettingsViewModel(AppSettings settings)
     {
         AutoDetectExternalProcesses = settings.AutoDetectExternalProcesses;
         DetectionIntervalSeconds = settings.DetectionIntervalSeconds;
         MaxOutputLines = settings.MaxOutputLines;
+        RunAsAdministrator = settings.RunAsAdministrator;
     }
 
     public void ApplyTo(AppSettings settings)
@@ -26,5 +30,6 @@ public sealed partial class SettingsViewModel : ObservableObject
         settings.AutoDetectExternalProcesses = AutoDetectExternalProcesses;
         settings.DetectionIntervalSeconds = Math.Max(1, Math.Min(60, DetectionIntervalSeconds));
         settings.MaxOutputLines = Math.Max(100, Math.Min(10000, MaxOutputLines));
+        settings.RunAsAdministrator = RunAsAdministrator;
     }
 }
