@@ -102,6 +102,9 @@
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                     <Button Classes="action-button"
+                            Content="前端构建"
+                            Command="{Binding OpenFrontendBuildCommand}"/>
+                    <Button Classes="action-button"
                             Content="启动全部"
                             Command="{Binding StartAllCommand}"/>
                     <Button Classes="action-button"

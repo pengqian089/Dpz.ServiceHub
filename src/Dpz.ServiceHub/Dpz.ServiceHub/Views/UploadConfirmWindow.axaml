@@ -1,0 +1,48 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        x:Class="Dpz.ServiceHub.Views.UploadConfirmWindow"
+        Icon="/Assets/Dpz.ServiceHub.ico"
+        Width="520"
+        Height="220"
+        MinWidth="520"
+        MinHeight="220"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Title="上传确认">
+
+    <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="20">
+        <TextBlock Grid.Row="0"
+                   Text="构建成功，是否覆盖上传到该档案配置的 S3？"
+                   TextWrapping="Wrap"
+                   FontSize="14"
+                   FontWeight="SemiBold"
+                   Margin="0,0,0,16"/>
+
+        <TextBlock Grid.Row="1"
+                   Text="远程目录"
+                   FontWeight="SemiBold"
+                   Margin="0,0,0,4"/>
+
+        <TextBox Grid.Row="2"
+                 Name="PrefixBox"
+                 Padding="8"
+                 PlaceholderText="例如: auth-assets"
+                 VerticalAlignment="Top"/>
+
+        <StackPanel Grid.Row="3"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8"
+                    Margin="0,16,0,0">
+            <Button Content="上传"
+                    MinWidth="90"
+                    Click="OnUploadClick"/>
+            <Button Content="跳过"
+                    MinWidth="90"
+                    Click="OnSkipClick"/>
+        </StackPanel>
+    </Grid>
+</Window>
